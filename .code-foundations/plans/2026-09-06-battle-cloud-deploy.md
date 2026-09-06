@@ -118,8 +118,15 @@ analyzes a replay.
 ## Stage 3: infrastructure
 
 **3.1 Terraform** for ECR, the App Runner service, the Fargate task definition and its execution
-and task roles, the OIDC provider and CI role, and networking. Managed Postgres: Neon's free tier
-to start, with RDS as the option if the free tier's limits bite.
+and task roles, the OIDC provider and CI role, and networking.
+
+**Postgres is Neon, decided 2026-09-06.** Not for the database's sake: RDS lives in a VPC, App
+Runner reaching a VPC needs a connector, and a connector routes the service's outbound traffic
+through that VPC, so its calls to Showdown would then need a $32/month NAT gateway. Avoiding that
+by moving the API to Fargate in a public subnet costs a $16/month ALB instead, because a task's
+public IP changes on every restart. The free database is the cheapest line item in a configuration
+whose other line items it raises. See `notes/decision-neon-over-rds-to-keep-the-api-out-of-a-vpc.md`,
+including the part of the argument that is documentation rather than measurement.
 
 **3.2 Trigger and sweep.** The API calls `RunTask` after a successful enqueue, subject to a cap
 on concurrent tasks. An EventBridge schedule runs the same task every few minutes so a dropped
@@ -212,3 +219,30 @@ Verified locally, since a workflow cannot be run here:
 
 Still unobserved: the workflow itself. It has never run, so job wiring, the GHCR login, and the
 `build-contexts` path in Actions are unproven until the next push to `main`.
+
+### 2026-09-06 — the registry and CI's identity, ahead of the account
+
+`infra/` holds Terraform for the two things that do not depend on any compute decision: three ECR
+repositories with immutable tags and a ten-image lifecycle window, and a GitHub OIDC provider with
+one IAM role that can push to exactly those repositories from exactly `main` of this repository.
+No access key exists anywhere.
+
+Two choices worth keeping. Tags are immutable, so the workflow pushes only a commit sha and a
+deploy pins a digest: a moving `main` tag in the registry a service deploys from is how a rollback
+stops being possible, and GHCR keeps the moving tag for humans instead. And the trust policy uses
+`StringEquals` on the exact `sub` rather than the usual `StringLike` on `repo:owner/repo:*`, which
+would hand the role to every branch and every pull-request workflow in the repository.
+
+`mirror-to-ecr` copies each image from GHCR into ECR by digest with `crane copy`, so what a deploy
+pins is the manifest CI built rather than a rebuild from the same commit. It is skipped while the
+`AWS_ROLE_ARN` repository variable is unset, which is to say until the account exists.
+
+Verified: `terraform fmt`, `init`, and `validate` pass, run in a `hashicorp/terraform:1.9`
+container rather than by installing Terraform. The lock file carries hashes for `darwin_arm64`,
+`linux_amd64`, and `linux_arm64`, so an apply from the laptop and a later apply from CI both work
+against it. Not verified, and unverifiable until there is an account: the plan, the apply, the role
+assumption, and the mirror job.
+
+Still open before Stage 3 can finish: the AWS account itself, a Neon project and its connection
+string, then the App Runner service, the Fargate task definition, the `RunTask` trigger, and the
+EventBridge sweep.

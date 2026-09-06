@@ -1,5 +1,6 @@
 import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { Store } from '../src/store.ts';
 import { RateLimiter } from '../src/ratelimit.ts';
@@ -7,8 +8,16 @@ import { RateLimiter } from '../src/ratelimit.ts';
 const DATABASE_URL =
   process.env['TEST_DATABASE_URL'] ?? process.env['DATABASE_URL'] ?? 'postgres:///battlecloud';
 const HOUR = 60 * 60 * 1000;
-const T0 = Date.UTC(2026, 8, 6, 12, 34, 56);
-const CLIENT = '203.0.113.7';
+
+// Deliberately in the past. `sweepRateLimits` deletes every window older than the boundary
+// it is given, across all clients, so a fake clock near the real one could delete rows
+// belonging to routes.test.ts, which runs in parallel against the same database.
+const T0 = Date.UTC(2020, 0, 1, 12, 34, 56);
+
+// Namespaced per run so these tests and the route tests cannot collide on a client key,
+// and so neither file has to truncate a table the other is using.
+const NS = randomUUID();
+const CLIENT = `${NS}-203.0.113.7`;
 
 let pool: pg.Pool;
 
@@ -19,7 +28,7 @@ after(async () => {
   await pool.end();
 });
 beforeEach(async () => {
-  await pool.query('TRUNCATE rate_limit_windows');
+  await pool.query('DELETE FROM rate_limit_windows WHERE client_key LIKE $1', [`${NS}%`]);
 });
 
 /** A limiter on its own clock, standing in for a separate API instance. */
@@ -52,7 +61,7 @@ test('two instances enforce one shared limit rather than one each', async () => 
 test('each client gets its own window', async () => {
   const limiter = instance(1, () => T0);
   assert.equal(await limiter.tryConsume(CLIENT), true);
-  assert.equal(await limiter.tryConsume('198.51.100.4'), true);
+  assert.equal(await limiter.tryConsume(`${NS}-198.51.100.4`), true);
   assert.equal(await limiter.tryConsume(CLIENT), false);
 });
 

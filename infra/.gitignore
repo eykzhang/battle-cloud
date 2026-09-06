@@ -1,0 +1,12 @@
+# Local state, and anything derived from it. The lock file is committed on purpose: it
+# pins provider versions for whoever applies next.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Real variable values. terraform.tfvars.example is the tracked one.
+*.tfvars
+!*.tfvars.example

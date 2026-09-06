@@ -38,7 +38,10 @@ after(async () => {
   await pool.end();
 });
 beforeEach(async () => {
-  await pool.query('TRUNCATE jobs, analyses, replays, rate_limit_windows RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE jobs, analyses, replays RESTART IDENTITY CASCADE');
+  // Not a TRUNCATE: rate_limit_windows is shared with ratelimit.test.ts, which node:test
+  // runs in parallel with this file. Each clears only the client keys it uses.
+  await pool.query("DELETE FROM rate_limit_windows WHERE client_key = '127.0.0.1'");
 });
 
 /** A server whose only non-real dependency is the network. */

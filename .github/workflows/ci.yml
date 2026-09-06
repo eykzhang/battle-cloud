@@ -52,6 +52,8 @@ jobs:
 
   api-image:
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -84,6 +86,8 @@ jobs:
 
   migrate-image:
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -157,6 +161,8 @@ jobs:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     needs: [gen9-guard]
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -220,3 +226,64 @@ jobs:
       # under a running service is how a rollback stops being possible.
       - name: Record the digest
         run: echo "worker ${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Copies what GHCR already holds into ECR, by digest.
+  #
+  # Skipped until the AWS_ROLE_ARN repository variable exists, so it costs nothing before
+  # the account does. `infra/` creates the role and prints both variables to set.
+  #
+  # A copy rather than a second push: crane moves the exact manifest, so the digest in ECR
+  # is the digest CI built and tested, and a deploy pinning it is pinning that image rather
+  # than a rebuild that happens to come from the same commit.
+  mirror-to-ecr:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != '' }}
+    needs: [api-image, migrate-image, worker-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      # Required for the OIDC token that becomes AWS credentials. Without it the assume
+      # step fails with a message that does not mention this line.
+      id-token: write
+    env:
+      CRANE_VERSION: v0.20.2
+      REGISTRY: ${{ vars.ECR_REGISTRY }}
+    steps:
+      - name: Install crane
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin crane
+          crane version
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Authenticate to both registries
+        run: |
+          set -euo pipefail
+          crane auth login ghcr.io -u '${{ github.actor }}' -p '${{ secrets.GITHUB_TOKEN }}'
+          aws ecr get-login-password --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
+            | crane auth login "$REGISTRY" -u AWS --password-stdin
+
+      - name: Copy each image
+        env:
+          API_DIGEST: ${{ needs.api-image.outputs.digest }}
+          MIGRATE_DIGEST: ${{ needs.migrate-image.outputs.digest }}
+          WORKER_DIGEST: ${{ needs.worker-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          copy() {
+            name="$1"; digest="$2"
+            # ECR repositories have immutable tags, so the commit sha is the only tag
+            # pushed. Re-running this workflow for the same commit is therefore a no-op
+            # that would fail on a second push; crane copy of an identical manifest is
+            # accepted because the content is the same.
+            crane copy "ghcr.io/eykzhang/battle-cloud-${name}@${digest}" "${REGISTRY}/battle-cloud/${name}:${GITHUB_SHA}"
+            echo "${name} ${REGISTRY}/battle-cloud/${name}:${GITHUB_SHA} ${digest}" >> "$GITHUB_STEP_SUMMARY"
+          }
+          copy api "$API_DIGEST"
+          copy migrate "$MIGRATE_DIGEST"
+          copy worker "$WORKER_DIGEST"

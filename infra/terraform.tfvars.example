@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars and edit if any default is wrong. Every variable has a default,
+# so an empty file is valid.
+
+aws_region        = "us-east-1"
+github_repository = "eykzhang/battle-cloud"
+deploy_branch     = "main"
