@@ -50,19 +50,16 @@ RUN maturin build --release \
       --out /wheels
 
 # ---------------------------------------------------------------------------
-# Stage 2: runtime. No Rust toolchain, no maturin, no build-essential.
-# ---------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
-
-ARG USAGE_STATS_FILE=2026-07_gen9ou-1500.json
-
-# `data` is the working directory for the life of the process.
+# Stage 2: the engine, installed and proven to be gen9.
 #
-# battle_engine.usage_stats.DEFAULT_STATS_DIR is the RELATIVE Path("data/usage_stats"),
-# and analyze_replay exposes no stats_dir override, so a caller cannot inject the path
-# through the public API and has to control the working directory instead. See
-# notes/gotcha-usage-stats-cache-is-keyed-on-a-relative-path.md for why this is set once
-# rather than per call.
+# A separate stage from the runtime below, and deliberately so: nothing here needs the
+# 13.7 MB usage-stats file, which is gitignored in battle-engine and therefore absent
+# from a fresh clone. That makes this stage buildable from public sources alone, so CI
+# can run the gen9 guard with `--target engine-verified` even though it cannot assemble
+# a complete worker image.
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm AS engine-verified
+
 WORKDIR /app
 
 COPY --from=engine-builder /wheels/*.whl /tmp/wheels/
@@ -76,8 +73,6 @@ COPY --from=engine battle_engine /tmp/engine/battle_engine
 COPY --from=engine tests/test_poke_engine_is_gen9.py /tmp/engine/tests/test_poke_engine_is_gen9.py
 RUN pip install --no-cache-dir /tmp/engine && pip install --no-cache-dir pytest
 
-COPY --from=engine data/usage_stats/${USAGE_STATS_FILE} /app/data/usage_stats/${USAGE_STATS_FILE}
-
 # The gen9 guard. Never remove this to speed up the build: the failure it catches is
 # silent, so an image that skips it can serve gen4 results for months while looking
 # healthy.
@@ -89,6 +84,27 @@ COPY --from=engine data/usage_stats/${USAGE_STATS_FILE} /app/data/usage_stats/${
 RUN python -c "import poke_engine; print('poke_engine imported:', poke_engine.__file__)" \
  && python -m pytest /tmp/engine/tests/test_poke_engine_is_gen9.py -q --no-header \
  && rm -rf /tmp/engine
+
+# ---------------------------------------------------------------------------
+# Stage 3: the runnable worker. No Rust toolchain, no maturin, no build-essential.
+# ---------------------------------------------------------------------------
+FROM engine-verified AS runtime
+
+ARG USAGE_STATS_FILE=2026-07_gen9ou-1500.json
+
+# `/app` is the working directory for the life of the process.
+#
+# battle_engine.usage_stats.DEFAULT_STATS_DIR is the RELATIVE Path("data/usage_stats"),
+# and analyze_replay exposes no stats_dir override, so a caller cannot inject the path
+# through the public API and has to control the working directory instead. See
+# notes/gotcha-usage-stats-cache-is-keyed-on-a-relative-path.md for why this is set once
+# rather than per call.
+WORKDIR /app
+
+# Not in battle-engine's git (its .gitignore excludes data/), so this needs a checkout
+# that has fetched it via scripts/fetch_usage_stats.py. This single line is why a full
+# worker image cannot be built from public sources alone.
+COPY --from=engine data/usage_stats/${USAGE_STATS_FILE} /app/data/usage_stats/${USAGE_STATS_FILE}
 
 RUN pip install --no-cache-dir "psycopg[binary]"
 

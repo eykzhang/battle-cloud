@@ -62,20 +62,32 @@ jobs:
           file: docker/api.Dockerfile
           push: false
 
-  # The worker image is deliberately not built here.
+  # Builds poke-engine from pinned source and runs the gen9 guard.
   #
-  # It needs a `battle-engine` checkout as a named build context, and that repository is
-  # not public. Building it in CI means giving this workflow credentials to a second
-  # private repo, which is a real decision about blast radius rather than a missing step.
+  # It stops at the `engine-verified` target rather than building a complete worker
+  # image, and the reason is narrow: battle-engine's .gitignore excludes `data/`, so the
+  # 13.7 MB cached usage-stats file the runtime stage copies is not in a fresh clone.
+  # Everything the guard needs is public, so the check that matters runs here; only the
+  # final data layer cannot.
   #
-  # What that costs: the gen9 guard runs only on a developer's machine. The failure it
-  # catches is silent (a gen4 poke-engine build simulates gen9ou with no error), so the
-  # guard matters, and running it only locally is weaker than running it here. Options,
-  # none taken yet: a deploy key scoped to battle-engine, publishing a prebuilt worker
-  # image to a registry from a machine that already has both checkouts, or vendoring the
-  # engine's analysis subset into this repo.
-  worker-image:
-    if: false
+  # The guard matters because the failure it catches is silent. poke-engine picks its
+  # generation at compile time and the published PyPI wheel is a gen4 build that
+  # simulates gen9ou with no error and no warning.
+  gen9-guard:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "see the comment above"
+      - uses: actions/checkout@v4
+      - name: Check out battle-engine
+        uses: actions/checkout@v4
+        with:
+          repository: eykzhang/battle-engine
+          path: .battle-engine
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the engine and run the gen9 guard
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/worker.Dockerfile
+          target: engine-verified
+          build-contexts: engine=.battle-engine
+          push: false

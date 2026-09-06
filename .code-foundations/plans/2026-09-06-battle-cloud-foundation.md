@@ -482,3 +482,35 @@ Still open: **S2**, **S3**, **S6**, **S7**, **S8**.
   yet by the project's own standard.
 - CI. No GitHub Actions workflow exists, so nothing runs these 106 tests except by hand.
 - `battle-brain`'s `HostedEngineService`. The seam analysis is written; no Swift is.
+
+
+### 2026-09-06 — correcting the CI rationale, and the docs that still said nothing was built
+
+**The claim that `battle-engine` is private was wrong.** `gh repo view` reports both
+`eykzhang/battle-engine` and `eykzhang/battle-brain` as PUBLIC. The previous commit message
+and the disabled `worker-image` job both asserted the opposite, and the reasoning built on it
+(that building the worker image in CI would mean handing the workflow credentials to a second
+private repo) does not hold.
+
+The real constraint is narrower and was found by checking rather than assuming: `battle-engine`'s
+`.gitignore` excludes `data/`, so the 13.7 MB cached usage-stats file the runtime stage copies
+is absent from a fresh clone. Everything the gen9 guard needs is public; only the final data
+layer is not.
+
+So `docker/worker.Dockerfile` now splits into an `engine-verified` target (poke-engine wheel,
+`battle_engine` installed, gen9 guard) and a `runtime` target that adds the usage-stats file,
+the worker package, and the queries. CI checks out `battle-engine` and builds the
+`engine-verified` target, so **the gen9 guard now runs on every push** rather than only on a
+developer's machine. Both targets verified locally: the guard reports `9 passed`, and the full
+image still analyzes a replay correctly (24 turns, 16 gradable, not degraded).
+
+**Two documents still said the project was unbuilt**, which matters more than it looks because
+`CLAUDE.md` is the first thing a future session reads:
+
+- `battle-cloud/CLAUDE.md` opened with "Status: not scoped yet -- Nothing is built. There is no
+  code, no schema, no infrastructure, and no plan file."
+- The parent vault's directory map said "Not scoped yet -- the folder holds only its `CLAUDE.md`."
+
+Both now describe what shipped. The parent `Projects/CLAUDE.md` was edited but deliberately not
+committed: that repository had uncommitted changes predating this session, and committing would
+sweep up work this session did not do.
