@@ -1,0 +1,72 @@
+# Local development stack.
+#
+#   cp .env.example .env
+#   docker compose --profile migrate run --rm migrate
+#   docker compose up worker
+#
+# The API tier has no server yet, so it has no service here. Adding one is a service
+# block and an image, not a change to anything below.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-battlecloud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-battlecloud}
+      POSTGRES_DB: ${POSTGRES_DB:-battlecloud}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # Workers wait on this rather than on a sleep: a Postgres container accepts
+      # connections some seconds after it starts, and a worker that connects too early
+      # exits before the queue ever has anything in it.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-battlecloud} -d ${POSTGRES_DB:-battlecloud}"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # One-shot. Runs under a profile so `docker compose up` does not try to start it as a
+  # long-lived service and report it as exited.
+  migrate:
+    profiles: ["migrate"]
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      additional_contexts:
+        engine: ../battle-engine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://battlecloud:battlecloud@postgres:5432/battlecloud}
+    volumes:
+      - ./db:/app/db:ro
+    command: ["python", "/app/db/migrate.py", "up"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      additional_contexts:
+        engine: ../battle-engine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://battlecloud:battlecloud@postgres:5432/battlecloud}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      # One search in flight per process, with this many native Rust threads inside it.
+      # WORKER_CONCURRENCY x ENGINE_THREADS must not exceed the host's cores: the search
+      # is budgeted in wall-clock time, so oversubscription returns weaker analyses
+      # rather than slower ones. The worker refuses to start if it would.
+      ENGINE_THREADS: ${ENGINE_THREADS:-4}
+      JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-900}
+      JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-3}
+    # Scale with `docker compose up --scale worker=N`, keeping N x ENGINE_THREADS at or
+    # under the host's core count.
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

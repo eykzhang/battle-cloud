@@ -118,7 +118,9 @@ class EngineAdapter:
 
         return AnalysisRun(
             document=document,
-            telemetry=summarize(document, wall_ms, identity.search_budget_ms_per_turn),
+            telemetry=summarize(
+                document, wall_ms, identity.search_budget_ms_per_turn, identity.opponent_samples
+            ),
         )
 
 

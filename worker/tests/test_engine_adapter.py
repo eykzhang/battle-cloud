@@ -12,7 +12,7 @@ from battle_cloud_worker.contract import AnalysisIdentity
 from battle_cloud_worker.engine import EngineAdapter, _classify
 from battle_cloud_worker.errors import EngineFailure, ErrorKind
 from battle_cloud_worker.profiles import PROFILES
-from battle_cloud_worker.telemetry import DEGRADATION_MARGIN, summarize
+from battle_cloud_worker.telemetry import DEGRADATION_MARGIN, PER_SAMPLE_OVERHEAD_MS, summarize
 
 LADDER = AnalysisIdentity(
     replay_id="gen9ou-2672899958",
@@ -157,7 +157,7 @@ def test_telemetry_records_samples_and_null_win_probabilities():
             {"turn": 3, "samplesUsed": 3, "winProbability": 0.4},
         ]
     }
-    t = summarize(doc, wall_ms=3000, budget_ms_per_turn=1000)
+    t = summarize(doc, wall_ms=3000, budget_ms_per_turn=1000, opponent_samples=8)
     assert t.total_turns == 3
     assert t.samples_used == {8: 2, 3: 1}
     assert t.null_win_probability_turns == 1
@@ -165,16 +165,34 @@ def test_telemetry_records_samples_and_null_win_probabilities():
     assert t.degraded is False
 
 
+def test_a_healthy_measured_run_is_not_flagged_as_degraded():
+    """The regression this exists to prevent: a flat 1.5x-of-budget threshold put the
+    line exactly on the engine's own baseline, so every successful run reported itself
+    degraded. These are the real numbers measured in the container on 2026-09-06."""
+    for budget, samples, ms_per_turn in ((200, 2, 318.3), (500, 4, 745.8), (1000, 8, 1482.0)):
+        doc = {"turns": [{"turn": i, "samplesUsed": samples, "winProbability": 0.5} for i in range(24)]}
+        t = summarize(doc, wall_ms=int(ms_per_turn * 24), budget_ms_per_turn=budget, opponent_samples=samples)
+        assert t.degraded is False, f"healthy run at budget={budget} was flagged degraded"
+
+
 def test_a_run_over_the_margin_is_flagged_as_degraded():
     doc = {"turns": [{"turn": i, "samplesUsed": 8, "winProbability": 0.5} for i in range(10)]}
-    under = summarize(doc, wall_ms=int(10 * 1000 * DEGRADATION_MARGIN) - 1, budget_ms_per_turn=1000)
-    over = summarize(doc, wall_ms=int(10 * 1000 * DEGRADATION_MARGIN) + 1000, budget_ms_per_turn=1000)
+    expected = 1000 + 8 * PER_SAMPLE_OVERHEAD_MS
+    under = summarize(doc, wall_ms=int(10 * expected * DEGRADATION_MARGIN) - 10, budget_ms_per_turn=1000, opponent_samples=8)
+    over = summarize(doc, wall_ms=int(10 * expected * DEGRADATION_MARGIN) + 1000, budget_ms_per_turn=1000, opponent_samples=8)
     assert under.degraded is False
     assert over.degraded is True
 
 
+def test_expected_cost_scales_with_samples_not_with_the_budget_alone():
+    doc = {"turns": [{"turn": 1, "samplesUsed": 2, "winProbability": 0.5}]}
+    few = summarize(doc, wall_ms=1, budget_ms_per_turn=1000, opponent_samples=2)
+    many = summarize(doc, wall_ms=1, budget_ms_per_turn=1000, opponent_samples=8)
+    assert many.expected_ms_per_turn > few.expected_ms_per_turn
+
+
 def test_telemetry_survives_a_document_with_no_turns():
-    t = summarize({"turns": []}, wall_ms=10, budget_ms_per_turn=1000)
+    t = summarize({"turns": []}, wall_ms=10, budget_ms_per_turn=1000, opponent_samples=8)
     assert t.total_turns == 0
     assert t.measured_ms_per_turn == 0.0
     assert t.degraded is False

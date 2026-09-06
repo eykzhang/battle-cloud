@@ -7,29 +7,50 @@ TypeScript web client is the second half; `battle-brain`, the iOS app, is a seco
 
 ## Status
 
-Foundation in progress. The pure logic layers of both tiers are built and tested. The database
-schema and the container definitions exist as reviewed artifacts that have never been executed.
+The worker half runs end to end. Submit a job against a stored replay and a containerized
+worker produces a real schema-v1 analysis document and stores it. The API tier has its typed
+contract and its Showdown client but no HTTP server yet, so nothing is reachable over a
+network.
 
 | Piece | State |
 |---|---|
 | `docs/contract.md` | written |
-| `api/src/contract/` | built, tested |
-| `api/src/replay/` | built, tested |
-| `worker/battle_cloud_worker/` | built, tested |
-| `db/` | written, never executed |
-| `docker/` | written, never built |
+| `api/src/contract/` | built, 16 tests |
+| `api/src/replay/` | built, 13 tests |
+| `worker/battle_cloud_worker/` | built, 34 tests, runs in the image |
+| `db/` | applied to Postgres 16.15, 31 tests |
+| `docker/worker.Dockerfile` | builds, 439 MB, gen9 guard passing |
+| `docker-compose.yml` | postgres + migrate + worker, verified |
+| API HTTP server | not started |
 | web client | not started |
 | deployment | not started |
 
-## What is missing to run any of this end to end
+## Try it
 
-Neither dependency is installed on the development machine as of 2026-09-06:
+Needs a container runtime (Colima or Docker Desktop) and a `battle-engine` checkout beside
+this one.
 
-- **A container runtime** (Docker Desktop or Colima). The worker image builds `poke-engine`'s
-  Rust extension from pinned source, which is the one step that can fail for reasons outside
-  this repo.
-- **Postgres.** Every migration and queue query in `db/` is unverified until there is a database
-  to run them against.
+```
+cp .env.example .env
+docker compose build worker
+docker compose up -d postgres
+docker compose --profile migrate run --rm migrate
+docker compose up worker
+```
+
+The worker polls for jobs. Nothing enqueues one yet without the API, so insert a replay row
+and a job row by hand to watch it work; `db/README.md` has the schema.
+
+## Tests
+
+```
+npm --prefix api install && npm --prefix api test          # 29
+DATABASE_URL=postgres:///battlecloud python -m pytest db/tests worker/tests -q   # 65
+```
+
+The database tests need a local Postgres and an applied migration. They are not mocked: the
+`SKIP LOCKED` behavior in particular cannot be verified by reading SQL, so it is executed
+across two real connections.
 
 ## Repository setup
 

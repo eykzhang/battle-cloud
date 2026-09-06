@@ -1,6 +1,6 @@
 # Plan: battle-cloud foundation (worker core, API core, schema, containers)
 **Created:** 2026-09-06
-**Status:** in progress -- Phases 1-4 built, Phases 5-6 not started
+**Status:** in progress -- Phases 1-6 built and verified; API server, web client, and deploy remain
 **Complexity:** complex
 **Review cadence:** 3
 ---
@@ -330,8 +330,8 @@ user.
 | 2. API contract layer | done | 16 tests; all six real fixtures validate; `tsc --noEmit` clean |
 | 3. Replay client and estimator | done | 13 tests; turn estimate exact on 6/6 replays; cap proven mid-stream |
 | 4. Worker core | done | 24 tests; no engine or extension needed to run them |
-| 5. Database schema and queue | not started | needs Postgres |
-| 6. Container definitions | not started | needs a container runtime |
+| 5. Database schema and queue | done, executed | 31 tests against Postgres 16.15, including a two-connection SKIP LOCKED race |
+| 6. Container definitions | done, built | 439 MB image, gen9 guard `9 passed` in-build, compose stack verified |
 
 **Two findings that changed the code, both from the CHECK review:**
 
@@ -375,3 +375,60 @@ From the CHECK pass, not yet acted on:
 - **S19.** The scope doc requires the ~13.7 MB usage-stats cold-start parse to be measured
   rather than assumed. It cannot be measured without the engine installed; recorded as
   deferred rather than dropped.
+
+
+### 2026-09-06, later — the infrastructure constraint was lifted, so Phases 5 and 6 became executable
+
+The user authorized installing a container runtime and Postgres. Installed: Colima, the Docker
+CLI, buildx, the compose plugin, and PostgreSQL 16.15. Everything the plan had marked
+"reviewed but unverified" is now executed.
+
+**The scoping doc's biggest risk is retired.** `docker/worker.Dockerfile` builds poke-engine's
+Rust extension from pinned `v0.0.48` source with `--no-default-features --features
+"poke-engine/gen9,poke-engine/terastallization"`, and the gen9 guard reports `9 passed` as a
+build step rather than skipping. Image is 439 MB. A real analysis of `gen9ou-2672927429`
+inside the container produced a schema-v1 document, 24 turns, 16 gradable, in 7.6 s at the
+`quick` profile.
+
+**The worker's queue loop was written and tested**, which the plan had deferred to a later
+plan. `worker/battle_cloud_worker/queue.py` claims a job, loads its replay, analyzes, stores
+the document, and completes or fails it, with a background heartbeat renewing the lease and
+an idle worker doing the reclaim pass rather than a separate service.
+
+**Test counts:** 29 API, 34 worker, 31 database. 94 total.
+
+### Three defects this stretch found in work from the earlier one
+
+**The degradation model was wrong and fired on every healthy run.** It flagged a run degraded
+above `1.5x` of the search budget. Measured in the container at three budgets, the excess over
+budget is about 60 ms per opponent sample, not a multiple of the budget: 118.3 ms at 2 samples,
+245.8 at 4, 482.0 at 8, agreeing within 3%. The flat-ratio model appeared to fit only because
+the two shipped profiles scale samples with budget in lockstep, and two points cannot separate
+a proportional model from an affine one. The healthy baseline is 1.48x-1.59x, so the threshold
+sat exactly on it. Now `budget + samples * 60ms` with a 1.25 margin, with a regression test
+asserting all three measured healthy runs are not flagged. See
+`notes/gotcha-engine-overhead-is-per-sample-not-a-flat-ratio.md`.
+
+**The worker's SQL path did not survive containerization.** `queue.py` resolved `db/queries`
+as `parents[2]`, correct in a checkout and wrong in the image, where the package is installed
+into site-packages. Fixed with a `QUERIES_DIR` environment variable the image sets.
+
+**Two Docker builds were reported as succeeding when they had failed**, because the command
+was piped into `tail`, which returns `tail`'s exit status. The first failure was the legacy
+builder rejecting `--build-context`, the second a stale `credsStore: desktop` in
+`~/.docker/config.json` pointing at a Docker Desktop that is not installed. Both are recorded
+alongside the `importorskip` finding in
+`notes/gotcha-importorskip-makes-a-build-time-guard-vacuous.md`, since all three are the same
+shape: a check that reports success for the case it exists to catch.
+
+### Review findings closed this stretch
+
+- **S10** (Phase 5 had no SQL-injection requirement): `db/tests/test_schema.py` now asserts no
+  query file interpolates a value.
+- **S18** (the relative-path `lru_cache`): implemented in `EngineAdapter` and written up as a
+  gotcha note.
+- **S19** (cold-start cost deferred as unmeasurable): now measurable, though not yet measured
+  separately from total wall time.
+
+Still open: **S14** (tests read fixtures from `../battle-brain`, which CI will not have),
+**S2**, **S3**, **S6**, **S7**, **S8**, **S13**.

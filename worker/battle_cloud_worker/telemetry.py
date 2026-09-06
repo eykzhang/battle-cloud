@@ -16,11 +16,31 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping
 
-#: How far measured per-turn wall time may exceed the requested budget before a run is
-#: called degraded. Search time is the dominant term but not the only one - parsing,
-#: state translation, and opponent sampling all sit outside the budget - so a modest
-#: overshoot is normal and only a large one indicates contention.
-DEGRADATION_MARGIN = 1.5
+#: Per-turn cost that sits OUTSIDE the search budget, per opponent sample, in
+#: milliseconds. Every sample pays for translating the poke-env battle into a
+#: poke_engine state and for filling an opponent team from usage stats before its search
+#: starts, and `search_time_ms` covers only the search.
+#:
+#: Measured 2026-09-06 inside battle-cloud-worker:dev on Colima (4 CPU, arm64), one
+#: process, replay gen9ou-2672927429 at 24 turns:
+#:
+#:     budget  samples  ms/turn  excess  excess/sample
+#:        200        2    318.3   118.3           59.2
+#:        500        4    745.8   245.8           61.5
+#:       1000        8   1482.0   482.0           60.3
+#:
+#: The excess tracks sample count, not turn count and not the budget: three points
+#: within 3% of each other. An earlier version of this module modelled it as a flat 1.5x
+#: multiplier on the budget, which happened to fit only because these profiles scale
+#: samples with budget - and which put the threshold exactly on the healthy baseline, so
+#: every successful run reported itself degraded.
+#:
+#: The absolute number is machine-specific. The shape (per sample, not per turn) is not.
+PER_SAMPLE_OVERHEAD_MS = 60.0
+
+#: How far past the expected cost a run may go before it is called degraded. Applied to
+#: budget plus modelled overhead rather than to the budget alone.
+DEGRADATION_MARGIN = 1.25
 
 
 @dataclass(frozen=True)
@@ -28,6 +48,7 @@ class RunTelemetry:
     wall_ms: int
     total_turns: int
     budget_ms_per_turn: int
+    opponent_samples: int = 1
     samples_used: Mapping[int, int] = field(default_factory=dict)
     null_win_probability_turns: int = 0
 
@@ -38,16 +59,29 @@ class RunTelemetry:
         return self.wall_ms / self.total_turns
 
     @property
+    def expected_ms_per_turn(self) -> float:
+        """Budget plus the modelled per-sample overhead. What a healthy run costs."""
+        return self.budget_ms_per_turn + self.opponent_samples * PER_SAMPLE_OVERHEAD_MS
+
+    @property
     def degraded(self) -> bool:
-        """True when this run took materially longer per turn than it asked for, which
-        is the signal that the host was oversubscribed and the analysis is weaker than
-        its configuration claims."""
+        """True when this run cost materially more per turn than a healthy one does.
+
+        The search is budgeted in wall-clock time, so a starved worker returns a weaker
+        analysis rather than a slower one, and the document records only normalized visit
+        shares. Wall time against the expected cost is the only place that shows up.
+        """
         if self.total_turns <= 0 or self.budget_ms_per_turn <= 0:
             return False
-        return self.measured_ms_per_turn > self.budget_ms_per_turn * DEGRADATION_MARGIN
+        return self.measured_ms_per_turn > self.expected_ms_per_turn * DEGRADATION_MARGIN
 
 
-def summarize(document: Dict[str, Any], wall_ms: int, budget_ms_per_turn: int) -> RunTelemetry:
+def summarize(
+    document: Dict[str, Any],
+    wall_ms: int,
+    budget_ms_per_turn: int,
+    opponent_samples: int = 1,
+) -> RunTelemetry:
     """Telemetry for a completed document.
 
     `turns` is read defensively rather than trusted: the document is the engine's output,
@@ -69,6 +103,7 @@ def summarize(document: Dict[str, Any], wall_ms: int, budget_ms_per_turn: int) -
         wall_ms=wall_ms,
         total_turns=len(turns),
         budget_ms_per_turn=budget_ms_per_turn,
+        opponent_samples=opponent_samples,
         samples_used=samples_used,
         null_win_probability_turns=nulls,
     )
