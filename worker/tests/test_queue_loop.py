@@ -20,7 +20,11 @@ from battle_cloud_worker.errors import EngineFailure, ErrorKind
 from battle_cloud_worker.queue import Worker
 from battle_cloud_worker.telemetry import summarize
 
-DB_URL = os.environ.get("TEST_DATABASE_URL", "postgres:///battlecloud")
+DB_URL = (
+    os.environ.get("TEST_DATABASE_URL")
+    or os.environ.get("DATABASE_URL")
+    or "postgres:///battlecloud"
+)
 REPLAY = "gen9ou-2672899958"
 DOC = {"schemaVersion": 1, "totalTurns": 2, "gradableTurns": 1,
        "turns": [{"turn": 1, "samplesUsed": 8, "winProbability": 0.5},

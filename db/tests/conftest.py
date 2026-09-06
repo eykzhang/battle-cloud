@@ -6,7 +6,13 @@ from pathlib import Path
 import psycopg
 import pytest
 
-DB_URL = os.environ.get("TEST_DATABASE_URL", "postgres:///battlecloud")
+# TEST_DATABASE_URL first so a scratch database can be used without touching
+# DATABASE_URL, then DATABASE_URL, then a local default. CI sets only the second.
+DB_URL = (
+    os.environ.get("TEST_DATABASE_URL")
+    or os.environ.get("DATABASE_URL")
+    or "postgres:///battlecloud"
+)
 QUERIES = Path(__file__).resolve().parents[1] / "queries"
 
 

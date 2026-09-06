@@ -8,7 +8,12 @@ import { Store } from '../src/store.ts';
 import { RateLimiter } from '../src/ratelimit.ts';
 import type { ApiConfig } from '../src/config.ts';
 
-const DATABASE_URL = process.env['TEST_DATABASE_URL'] ?? 'postgres:///battlecloud';
+// TEST_DATABASE_URL first so a developer can point the suite at a scratch database
+// without touching DATABASE_URL, then DATABASE_URL, then a local default. CI sets only
+// DATABASE_URL, and an earlier version of this line skipped straight from the first to
+// the default, which connected to nothing and failed 12 tests on SASL auth.
+const DATABASE_URL =
+  process.env['TEST_DATABASE_URL'] ?? process.env['DATABASE_URL'] ?? 'postgres:///battlecloud';
 const REPLAY_ID = 'gen9ou-2672927429';
 const RAW = JSON.parse(readFileSync(new URL(`./fixtures/replays/${REPLAY_ID}.json`, import.meta.url), 'utf8'));
 const ANALYSIS = JSON.parse(readFileSync(new URL(`./fixtures/analysis/${REPLAY_ID}.json`, import.meta.url), 'utf8'));
