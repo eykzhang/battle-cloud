@@ -98,13 +98,22 @@ an image under 150 MB.
 
 ## Stage 2: artifacts CI can build and publish
 
-**2.1** CI fetches usage stats with `battle-engine`'s `scripts/fetch_usage_stats.py` and builds
-the `runtime` target, so the image that gets deployed is the image CI proved.
+**2.1** CI fetches usage stats with `battle-engine`'s `scripts/fetch_usage_stats.py`, pinned to a
+month, and builds the `runtime` target, so the image that gets deployed is the image CI proved.
+The pin is load-bearing: with no `--month` the script resolves whatever Smogon published most
+recently, which would move the image's dataset on Smogon's schedule and, since workers claim only
+jobs naming their own dataset, leave every submission queued while both tiers looked healthy.
 
-**2.2** Both images push to ECR by digest on `main`, through GitHub OIDC with no long-lived keys.
-Deploys reference digests rather than tags, so a rollback is a digest change.
+**2.2** All three images publish by digest on `main`.
 
-**Done when:** a push to `main` leaves an ECR digest that `docker run` can analyze a replay from.
+**Registry: GHCR now, ECR at Stage 3.** ECR is the better target for the deployed worker, since an
+in-region pull is the difference that matters for a task started per burst, and it is IAM-native
+rather than needing a pull secret. It also needs an AWS account that does not exist yet. GHCR needs
+nothing but the workflow's own token, so it is what can be built and verified today. Stage 3 adds
+the ECR mirror and deploys from ECR digests; nothing about the images changes when it does.
+
+**Done when:** a push to `main` leaves a digest for each of the three images, and the worker digest
+analyzes a replay.
 
 ## Stage 3: infrastructure
 
@@ -179,3 +188,27 @@ See `notes/gotcha-docker-images-size-is-disk-usage-not-pull-size.md`.
 
 **Tests: 134.** 50 API (17 contract, 13 replay, 14 routes, 6 rate limiter) and 84 Python
 (48 worker, 36 database), up from 106.
+
+### 2026-09-06 — Stage 2 built, not yet observed running
+
+`.github/workflows/ci.yml` gained `migrate-image` and `worker-image`, and `api-image` now
+publishes. All three push to GHCR by digest on `main` only; a pull request still builds every
+image and claims no tag.
+
+`worker-image` is separate from `gen9-guard` and depends on it, for one reason: it is the only job
+that needs smogon.com. The guard has to keep running on every pull request whatever Smogon is
+doing, because the failure it catches is a gen4 wheel simulating gen9 with no error. They share a
+buildx cache scope, so the Rust extension compiles once per push rather than twice.
+
+Verified locally, since a workflow cannot be run here:
+
+- `fetch_usage_stats.py --month 2026-07 --format gen9ou --cutoff 1500` fetched in 1.0 s: 13.7 MB,
+  399 species, 654,262 battles.
+- That file's SHA-256 is identical to the one in the local `battle-engine` checkout and to the one
+  baked into `battle-cloud-worker:latest`, so a CI-built image carries the same bytes as the image
+  every measurement so far was taken against.
+- Two new agreement tests assert the dataset pin is one value across the Dockerfile's ARG default,
+  `.env.example`, compose, and the workflow, and the same for the poke-engine tag. 86 Python tests.
+
+Still unobserved: the workflow itself. It has never run, so job wiring, the GHCR login, and the
+`build-contexts` path in Actions are unproven until the next push to `main`.

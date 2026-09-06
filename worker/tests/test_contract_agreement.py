@@ -13,6 +13,10 @@ REPO = Path(__file__).resolve().parents[2]
 CONTRACT = REPO / "docs" / "contract.md"
 TS_ERRORS = REPO / "api" / "src" / "contract" / "errors.ts"
 TS_IDENTITY = REPO / "api" / "src" / "contract" / "identity.ts"
+WORKER_DOCKERFILE = REPO / "docker" / "worker.Dockerfile"
+ENV_EXAMPLE = REPO / ".env.example"
+COMPOSE = REPO / "docker-compose.yml"
+WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
 
 
 def _kinds_in_contract_doc() -> set[str]:
@@ -65,3 +69,42 @@ def test_python_matches_the_contract_document():
 
 def test_typescript_matches_the_contract_document():
     assert _kinds_in_typescript() == _kinds_in_contract_doc()
+
+
+def _dockerfile_arg(name: str) -> str:
+    return re.search(rf"^ARG {name}=(\S+)", WORKER_DOCKERFILE.read_text(), flags=re.MULTILINE).group(1)
+
+
+def _env_example(name: str) -> str:
+    return re.search(rf"^{name}=(\S+)", ENV_EXAMPLE.read_text(), flags=re.MULTILINE).group(1)
+
+
+def _compose_defaults(name: str) -> set[str]:
+    return set(re.findall(rf"\$\{{{name}:-([^}}]+)\}}", COMPOSE.read_text()))
+
+
+def _workflow_env(name: str) -> str:
+    return re.search(rf"^\s+{name}: '([^']+)'", WORKFLOW.read_text(), flags=re.MULTILINE).group(1)
+
+
+def test_the_usage_stats_dataset_is_pinned_to_one_value_everywhere():
+    """The API enqueues jobs naming this dataset and workers claim only jobs naming their
+    own, so a disagreement between the image build and the API's environment does not
+    degrade anything: it leaves every submission queued forever, with both sides healthy.
+
+    CI is included because `fetch_usage_stats.py` with no `--month` resolves whatever
+    month Smogon published most recently, which would move the image's dataset on its own
+    schedule."""
+    pinned = _dockerfile_arg("USAGE_STATS_DATASET")
+    assert _env_example("USAGE_STATS_DATASET") == pinned
+    assert _compose_defaults("USAGE_STATS_DATASET") == {pinned}
+    assert _workflow_env("USAGE_STATS_DATASET") == pinned
+
+
+def test_the_poke_engine_tag_is_pinned_to_one_value_everywhere():
+    """Same shape, gentler failure: a tag mismatch misses the cache rather than stalling
+    the queue, since the API would enqueue work no worker claims only if the tag also
+    differs from the image's."""
+    pinned = _dockerfile_arg("POKE_ENGINE_TAG")
+    assert _env_example("POKE_ENGINE_TAG") == pinned
+    assert _compose_defaults("POKE_ENGINE_TAG") == {pinned}

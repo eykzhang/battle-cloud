@@ -28,6 +28,7 @@ Not built: the React web client, and any deployment. Nothing has a public URL.
 | `docker-compose.yml` | postgres + migrate + api + worker, verified |
 | `api/src/routes.ts` | built, 14 route tests against real Postgres |
 | `docker/api.Dockerfile` | builds, 82 MB pulled |
+| CI | tests, three image builds, gen9 guard; images publish to GHCR from `main` |
 | web client | not started |
 | deployment | not started |
 
