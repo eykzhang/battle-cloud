@@ -90,7 +90,17 @@ RUN python -c "import poke_engine; print('poke_engine imported:', poke_engine.__
 # ---------------------------------------------------------------------------
 FROM engine-verified AS runtime
 
-ARG USAGE_STATS_FILE=2026-07_gen9ou-1500.json
+# The dataset is the month, and the file name is derived from it rather than given
+# independently, so the value baked into USAGE_STATS_DATASET below cannot disagree with
+# the file actually copied in. That pair is what the analysis identity records, and a
+# disagreement would label analyses with a prior they were not computed against.
+ARG USAGE_STATS_DATASET=2026-07
+ARG USAGE_STATS_SELECTOR=gen9ou-1500
+ARG USAGE_STATS_FILE=${USAGE_STATS_DATASET}_${USAGE_STATS_SELECTOR}.json
+
+# Re-declared because ARG scope is per stage: POKE_ENGINE_TAG was consumed by the builder
+# and has to be named again here to reach the runtime environment.
+ARG POKE_ENGINE_TAG=v0.0.48
 
 # `/app` is the working directory for the life of the process.
 #
@@ -116,8 +126,13 @@ RUN pip install --no-cache-dir /app/worker
 # repo-relative fallback path for these does not exist here; QUERIES_DIR is what it uses.
 COPY db/queries /app/db/queries
 
+# POKE_ENGINE_TAG and USAGE_STATS_DATASET are identity fields, and the worker refuses to
+# start without them. They are set from the build arguments that selected the wheel and
+# the stats file, so the image describes itself rather than trusting a deploy to.
 ENV PYTHONUNBUFFERED=1 \
     ENGINE_DATA_DIR=/app \
-    QUERIES_DIR=/app/db/queries
+    QUERIES_DIR=/app/db/queries \
+    POKE_ENGINE_TAG=${POKE_ENGINE_TAG} \
+    USAGE_STATS_DATASET=${USAGE_STATS_DATASET}
 
 CMD ["python", "-m", "battle_cloud_worker"]

@@ -13,6 +13,13 @@ export interface ApiConfig {
    * and re-analyze, which is wasteful rather than wrong.
    */
   readonly pokeEngineTag: string;
+  /**
+   * The month of the usage-stats file the worker image carries, as it appears in the
+   * file name (`2026-07_gen9ou-1500.json`). Also part of the identity, and with a
+   * sharper failure mode than the tag above: a worker only claims jobs whose dataset
+   * matches its own, so a wrong value here leaves every submission queued.
+   */
+  readonly usageStatsDataset: string;
 }
 
 export class ConfigError extends Error {}
@@ -38,5 +45,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     replayTimeoutMs: int(env, 'REPLAY_TIMEOUT_MS', DEFAULT_TIMEOUT_MS),
     submitRateLimitPerHour: int(env, 'SUBMIT_RATE_LIMIT_PER_HOUR', 20),
     pokeEngineTag: env['POKE_ENGINE_TAG'] ?? 'v0.0.48',
+    usageStatsDataset: env['USAGE_STATS_DATASET'] ?? '2026-07',
   };
 }

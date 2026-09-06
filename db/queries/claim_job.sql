@@ -11,6 +11,14 @@
 --
 -- attempts increments on claim, not on failure. A worker that dies without reporting
 -- anything still consumed an attempt, and that is exactly the case the cap exists for.
+--
+-- The engine-build filter is a correctness rule rather than a scheduling preference. A
+-- job's identity asserts which engine build and which usage-stats dataset produced its
+-- analysis, and a worker carrying a different build cannot honor that assertion. Without
+-- the filter it would analyze the job anyway and store the result under an identity it
+-- did not produce. That is invisible while every worker is the same version and wrong
+-- during any rolling deploy, which a scale-to-zero fleet makes routine. A job no running
+-- worker can serve stays queued.
 UPDATE jobs
 SET status           = 'running',
     attempts         = attempts + 1,
@@ -22,10 +30,12 @@ WHERE id = (
     SELECT id
     FROM jobs
     WHERE status = 'queued'
+      AND poke_engine_tag = %(poke_engine_tag)s
+      AND usage_stats_dataset = %(usage_stats_dataset)s
     ORDER BY created_at, id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
 RETURNING id, replay_id, perspective, profile, search_budget_ms_per_turn,
-          opponent_samples, threads, usage_stats_cutoff, poke_engine_tag, seed,
-          attempts, estimated_turns, lease_expires_at;
+          opponent_samples, threads, usage_stats_cutoff, usage_stats_dataset,
+          poke_engine_tag, seed, attempts, estimated_turns, lease_expires_at;

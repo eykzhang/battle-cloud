@@ -9,15 +9,16 @@
 -- visible to RETURNING.
 INSERT INTO jobs (
     replay_id, perspective, profile, search_budget_ms_per_turn, opponent_samples,
-    threads, usage_stats_cutoff, poke_engine_tag, seed, estimated_turns, estimated_search_ms
+    threads, usage_stats_cutoff, usage_stats_dataset, poke_engine_tag, seed,
+    estimated_turns, estimated_search_ms
 )
 VALUES (
     %(replay_id)s, %(perspective)s, %(profile)s, %(search_budget_ms_per_turn)s,
-    %(opponent_samples)s, %(threads)s, %(usage_stats_cutoff)s, %(poke_engine_tag)s,
-    %(seed)s, %(estimated_turns)s, %(estimated_search_ms)s
+    %(opponent_samples)s, %(threads)s, %(usage_stats_cutoff)s, %(usage_stats_dataset)s,
+    %(poke_engine_tag)s, %(seed)s, %(estimated_turns)s, %(estimated_search_ms)s
 )
 ON CONFLICT (replay_id, perspective, search_budget_ms_per_turn, opponent_samples,
-             threads, usage_stats_cutoff, poke_engine_tag, seed)
+             threads, usage_stats_cutoff, usage_stats_dataset, poke_engine_tag, seed)
 WHERE status IN ('queued', 'running')
 DO UPDATE SET updated_at = jobs.updated_at
 RETURNING id, status, attempts, (xmax = 0) AS created;

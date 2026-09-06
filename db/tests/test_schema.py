@@ -9,14 +9,21 @@ REPLAY = "gen9ou-2672899958"
 
 ANALYSIS = """
 INSERT INTO analyses (replay_id, perspective, search_budget_ms_per_turn, opponent_samples,
-    threads, usage_stats_cutoff, poke_engine_tag, seed, document, total_turns,
-    gradable_turns, wall_ms)
+    threads, usage_stats_cutoff, usage_stats_dataset, poke_engine_tag, seed, document,
+    total_turns, gradable_turns, wall_ms)
 VALUES (%(replay_id)s, %(perspective)s, %(budget)s, %(samples)s, %(threads)s,
-        %(cutoff)s, %(tag)s, %(seed)s, '{}'::jsonb, 93, 79, 93000)
+        %(cutoff)s, %(dataset)s, %(tag)s, %(seed)s, '{}'::jsonb, 93, 79, 93000)
 """
 
 BASE = dict(replay_id=REPLAY, perspective="p2", budget=1000, samples=8, threads=4,
-            cutoff=1500, tag="v0.0.48", seed=0)
+            cutoff=1500, dataset="2026-07", tag="v0.0.48", seed=0)
+
+#: The identity, in the order `docs/contract.md` declares it. Postgres is asked for the
+#: real constraint below rather than trusted to have been migrated correctly.
+IDENTITY_COLUMNS = [
+    "replay_id", "perspective", "search_budget_ms_per_turn", "opponent_samples",
+    "threads", "usage_stats_cutoff", "usage_stats_dataset", "poke_engine_tag", "seed",
+]
 
 
 @pytest.fixture
@@ -33,7 +40,7 @@ def test_the_identity_constraint_rejects_an_exact_duplicate(seeded):
 
 @pytest.mark.parametrize("field, value", [
     ("seed", 1), ("perspective", "p1"), ("budget", 200), ("samples", 2),
-    ("threads", 2), ("cutoff", 1825), ("tag", "v0.0.49"),
+    ("threads", 2), ("cutoff", 1825), ("dataset", "2026-08"), ("tag", "v0.0.49"),
 ])
 def test_every_identity_field_separates_two_analyses(seeded, field, value):
     """Seed included. Without it in the constraint, two analyses at different seeds
@@ -49,8 +56,9 @@ def test_a_job_cannot_be_half_claimed(db):
     with pytest.raises(psycopg.errors.CheckViolation):
         db.execute(
             """INSERT INTO jobs (replay_id, perspective, profile, search_budget_ms_per_turn,
-                   opponent_samples, threads, usage_stats_cutoff, poke_engine_tag, seed, claimed_by)
-               VALUES (%s,'p2','ladder-parity',1000,8,4,1500,'v0.0.48',0,'worker-1')""",
+                   opponent_samples, threads, usage_stats_cutoff, usage_stats_dataset,
+                   poke_engine_tag, seed, claimed_by)
+               VALUES (%s,'p2','ladder-parity',1000,8,4,1500,'2026-07','v0.0.48',0,'worker-1')""",
             (REPLAY,),
         )
 
@@ -59,8 +67,9 @@ def test_a_succeeded_job_must_carry_an_analysis(db):
     with pytest.raises(psycopg.errors.CheckViolation):
         db.execute(
             """INSERT INTO jobs (replay_id, perspective, profile, search_budget_ms_per_turn,
-                   opponent_samples, threads, usage_stats_cutoff, poke_engine_tag, seed, status)
-               VALUES (%s,'p2','ladder-parity',1000,8,4,1500,'v0.0.48',0,'succeeded')""",
+                   opponent_samples, threads, usage_stats_cutoff, usage_stats_dataset,
+                   poke_engine_tag, seed, status)
+               VALUES (%s,'p2','ladder-parity',1000,8,4,1500,'2026-07','v0.0.48',0,'succeeded')""",
             (REPLAY,),
         )
 
@@ -69,8 +78,9 @@ def test_a_failed_job_must_carry_an_error_kind(db):
     with pytest.raises(psycopg.errors.CheckViolation):
         db.execute(
             """INSERT INTO jobs (replay_id, perspective, profile, search_budget_ms_per_turn,
-                   opponent_samples, threads, usage_stats_cutoff, poke_engine_tag, seed, status)
-               VALUES (%s,'p2','ladder-parity',1000,8,4,1500,'v0.0.48',0,'failed')""",
+                   opponent_samples, threads, usage_stats_cutoff, usage_stats_dataset,
+                   poke_engine_tag, seed, status)
+               VALUES (%s,'p2','ladder-parity',1000,8,4,1500,'2026-07','v0.0.48',0,'failed')""",
             (REPLAY,),
         )
 
@@ -98,3 +108,35 @@ def test_no_query_file_interpolates_a_value():
         body = "\n".join(l for l in path.read_text().splitlines() if not l.strip().startswith("--"))
         assert "%(" in body, f"{path.name} has no bound parameters at all"
         assert not re.search(r"\{[a-z_]+\}|\+\s*['\"]|f['\"]", body), f"{path.name} looks interpolated"
+
+
+def test_the_analyses_constraint_covers_exactly_the_documented_identity(db):
+    """The fourth copy of the identity list. The other three are checked against each
+    other in worker/tests/test_contract_agreement.py; this one asks Postgres what the
+    constraint actually is, which is the only copy that a missed migration can break."""
+    with db.cursor() as cur:
+        cur.execute(
+            """SELECT a.attname
+                 FROM pg_constraint c
+                 JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+                WHERE c.conname = 'analyses_identity_key'
+                ORDER BY k.ord""",
+        )
+        assert [row[0] for row in cur.fetchall()] == IDENTITY_COLUMNS
+
+
+def test_the_active_job_index_covers_exactly_the_documented_identity(db):
+    """Submission idempotence and analysis caching have to agree on what "the same
+    request" means. If these two lists ever diverge, a resubmit either duplicates work or
+    joins a job that will produce a different analysis."""
+    with db.cursor() as cur:
+        cur.execute(
+            """SELECT a.attname
+                 FROM pg_index i
+                 JOIN unnest(i.indkey) WITH ORDINALITY k(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                WHERE i.indexrelid = 'jobs_active_identity_key'::regclass
+                ORDER BY k.ord""",
+        )
+        assert [row[0] for row in cur.fetchall()] == IDENTITY_COLUMNS

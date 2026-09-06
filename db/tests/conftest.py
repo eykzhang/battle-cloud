@@ -5,6 +5,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from psycopg.rows import dict_row
 
 # TEST_DATABASE_URL first so a scratch database can be used without touching
 # DATABASE_URL, then DATABASE_URL, then a local default. CI sets only the second.
@@ -47,10 +48,19 @@ IDENTITY = {
     "opponent_samples": 8,
     "threads": 4,
     "usage_stats_cutoff": 1500,
+    "usage_stats_dataset": "2026-07",
     "poke_engine_tag": "v0.0.48",
     "seed": 0,
     "estimated_turns": 93,
     "estimated_search_ms": 93000,
+}
+
+
+#: The engine build a claiming worker declares. A worker claims only jobs whose identity
+#: names its own build, so these are part of every claim.
+CLAIM_BUILD = {
+    "poke_engine_tag": IDENTITY["poke_engine_tag"],
+    "usage_stats_dataset": IDENTITY["usage_stats_dataset"],
 }
 
 
@@ -61,9 +71,15 @@ def enqueue(conn, **overrides):
         return cur.fetchone()
 
 
-def claim(conn, worker_id="worker-1", lease_seconds=900):
-    with conn.cursor() as cur:
-        cur.execute(sql("claim_job"), {"worker_id": worker_id, "lease_seconds": lease_seconds})
+def claim(conn, worker_id="worker-1", lease_seconds=900, **build):
+    """`build` overrides the claiming worker's engine build. A worker claims only jobs
+    whose identity names its own build, so these two values are part of the claim."""
+    params = {"worker_id": worker_id, "lease_seconds": lease_seconds, **CLAIM_BUILD, **build}
+    # dict rows rather than tuples: the claim's RETURNING list is the identity plus
+    # bookkeeping, so adding an identity field shifts every positional index in every
+    # test that reads one.
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(sql("claim_job"), params)
         return cur.fetchone()
 
 

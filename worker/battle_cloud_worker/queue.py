@@ -104,7 +104,15 @@ class Worker:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 _sql("claim_job"),
-                {"worker_id": self.worker_id, "lease_seconds": self.config.lease_seconds},
+                {
+                    "worker_id": self.worker_id,
+                    "lease_seconds": self.config.lease_seconds,
+                    # Not a filter for efficiency. A job's identity asserts which engine
+                    # build produced its analysis, so a worker on a different build must
+                    # leave it for one that can honor that.
+                    "poke_engine_tag": self.config.poke_engine_tag,
+                    "usage_stats_dataset": self.config.usage_stats_dataset,
+                },
             )
             job = cur.fetchone()
         if job is None:
@@ -120,6 +128,7 @@ class Worker:
                 opponent_samples=job["opponent_samples"],
                 threads=job["threads"],
                 usage_stats_cutoff=job["usage_stats_cutoff"],
+                usage_stats_dataset=job["usage_stats_dataset"],
                 poke_engine_tag=job["poke_engine_tag"],
                 seed=job["seed"],
             )
@@ -156,11 +165,12 @@ class Worker:
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO analyses (replay_id, perspective, search_budget_ms_per_turn,
-                           opponent_samples, threads, usage_stats_cutoff, poke_engine_tag, seed,
-                           document, total_turns, gradable_turns, wall_ms, degraded)
+                           opponent_samples, threads, usage_stats_cutoff, usage_stats_dataset,
+                           poke_engine_tag, seed, document, total_turns, gradable_turns,
+                           wall_ms, degraded)
                        VALUES (%(replay_id)s, %(perspective)s, %(budget)s, %(samples)s, %(threads)s,
-                               %(cutoff)s, %(tag)s, %(seed)s, %(document)s, %(total)s, %(gradable)s,
-                               %(wall)s, %(degraded)s)
+                               %(cutoff)s, %(dataset)s, %(tag)s, %(seed)s, %(document)s, %(total)s,
+                               %(gradable)s, %(wall)s, %(degraded)s)
                        ON CONFLICT ON CONSTRAINT analyses_identity_key DO UPDATE
                            SET document = EXCLUDED.document, wall_ms = EXCLUDED.wall_ms,
                                degraded = EXCLUDED.degraded
@@ -172,6 +182,7 @@ class Worker:
                         "samples": job["opponent_samples"],
                         "threads": job["threads"],
                         "cutoff": job["usage_stats_cutoff"],
+                        "dataset": job["usage_stats_dataset"],
                         "tag": job["poke_engine_tag"],
                         "seed": job["seed"],
                         "document": json.dumps(doc),
@@ -212,18 +223,45 @@ class Worker:
                 },
             )
 
+    def _reclaim(self, conn: psycopg.Connection) -> None:
+        """Return jobs whose lease expired, or dead-letter them at the attempt cap.
+
+        Done by whichever worker is between jobs rather than by a separate reaper, which
+        keeps the deployment to two processes. In drain mode it also means a task that
+        died mid-analysis is recovered by the next task rather than waiting for a
+        long-lived worker that may not exist.
+        """
+        with conn.cursor() as cur:
+            cur.execute(_sql("reclaim_expired"), {"max_attempts": self.config.max_attempts})
+            for row in cur.fetchall():
+                log.info("reclaimed job %s -> %s (attempt %s)", *row)
+
+    def run_until_empty(self, conn: Optional[psycopg.Connection] = None) -> int:
+        """Claim and process until nothing is left for this build, then return the count.
+
+        The exit condition is deliberately "nothing claimable by me" rather than "the
+        queue is empty": a job for another engine build is not this process's work, and
+        waiting for one that no running worker can serve would never end.
+        """
+        if conn is None:
+            with psycopg.connect(self.config.database_url, autocommit=True) as owned:
+                return self.run_until_empty(owned)
+        log.info("worker %s draining, data dir %s", self.worker_id, self.adapter.data_dir)
+        processed = 0
+        while True:
+            self._reclaim(conn)
+            if not self.run_once(conn):
+                log.info("worker %s drained %s job(s)", self.worker_id, processed)
+                return processed
+            processed += 1
+
     def run_forever(self, poll_seconds: float = 2.0) -> None:
         log.info("worker %s starting, data dir %s", self.worker_id, self.adapter.data_dir)
         with psycopg.connect(self.config.database_url, autocommit=True) as conn:
             while True:
                 try:
                     if not self.run_once(conn):
-                        # Reclaiming here rather than in a separate service keeps the
-                        # deployment to two processes. Any idle worker does it.
-                        with conn.cursor() as cur:
-                            cur.execute(_sql("reclaim_expired"), {"max_attempts": self.config.max_attempts})
-                            for row in cur.fetchall():
-                                log.info("reclaimed job %s -> %s (attempt %s)", *row)
+                        self._reclaim(conn)
                         time.sleep(poll_seconds)
                 except KeyboardInterrupt:
                     log.info("worker %s stopping", self.worker_id)

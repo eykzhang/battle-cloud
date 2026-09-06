@@ -21,6 +21,7 @@ LADDER = AnalysisIdentity(
     opponent_samples=8,
     threads=4,
     usage_stats_cutoff=1500,
+    usage_stats_dataset="2026-07",
     poke_engine_tag="v0.0.48",
     seed=0,
 )

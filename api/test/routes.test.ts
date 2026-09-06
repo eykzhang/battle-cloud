@@ -26,6 +26,7 @@ const CONFIG: ApiConfig = {
   replayTimeoutMs: 5000,
   submitRateLimitPerHour: 20,
   pokeEngineTag: 'v0.0.48',
+  usageStatsDataset: '2026-07',
 };
 
 let pool: pg.Pool;
@@ -37,7 +38,7 @@ after(async () => {
   await pool.end();
 });
 beforeEach(async () => {
-  await pool.query('TRUNCATE jobs, analyses, replays RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE jobs, analyses, replays, rate_limit_windows RESTART IDENTITY CASCADE');
 });
 
 /** A server whose only non-real dependency is the network. */
@@ -48,7 +49,7 @@ async function server(opts: { fetch?: typeof globalThis.fetch; limit?: number } 
   await registerRoutes(app, {
     config: { ...CONFIG, submitRateLimitPerHour: opts.limit ?? 20 },
     store: new Store(pool),
-    limiter: new RateLimiter(opts.limit ?? 20),
+    limiter: new RateLimiter(new Store(pool), opts.limit ?? 20),
     fetch: fetchImpl as typeof globalThis.fetch,
   });
   return app;
@@ -63,9 +64,9 @@ async function seedAnalysis(): Promise<string> {
   );
   const { rows } = await pool.query(
     `INSERT INTO analyses (replay_id, perspective, search_budget_ms_per_turn, opponent_samples,
-        threads, usage_stats_cutoff, poke_engine_tag, seed, document, total_turns,
-        gradable_turns, wall_ms)
-     VALUES ($1,'p2',200,2,4,1500,'v0.0.48',0,$2,24,16,7500) RETURNING id`,
+        threads, usage_stats_cutoff, usage_stats_dataset, poke_engine_tag, seed, document,
+        total_turns, gradable_turns, wall_ms)
+     VALUES ($1,'p2',200,2,4,1500,'2026-07','v0.0.48',0,$2,24,16,7500) RETURNING id`,
     [REPLAY_ID, JSON.stringify(ANALYSIS)],
   );
   return rows[0].id;
@@ -96,6 +97,42 @@ test('a first submission fetches the replay and returns 202 with a job handle', 
   assert.equal(res.headers['location'], `/v1/jobs/${body.jobId}`);
   assert.equal(fetched, 1);
   await app.close();
+});
+
+test('the enqueued job carries the engine build the API is configured for', async () => {
+  // The worker claims only jobs naming its own build, so a job that recorded the wrong
+  // dataset would never be claimed by anything.
+  const app = await server();
+  await app.inject({ method: 'POST', url: '/v1/analyses', payload: SUBMIT });
+  const { rows } = await pool.query('SELECT usage_stats_dataset, poke_engine_tag FROM jobs');
+  assert.deepEqual(rows[0], { usage_stats_dataset: '2026-07', poke_engine_tag: 'v0.0.48' });
+  await app.close();
+});
+
+test('a cached analysis from another dataset is not served for this one', async () => {
+  // Same replay, same profile, different usage-stats month. Before the dataset was part
+  // of the identity this hit the cache and served an analysis built on a different prior.
+  await seedAnalysis();
+  const app = await server();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/analyses',
+    payload: SUBMIT,
+    // The seeded row is 2026-07; this server is 2026-08.
+  });
+  assert.equal(res.statusCode, 200, 'setup: the matching-dataset server must hit the cache');
+  await app.close();
+
+  const august = Fastify({ logger: false });
+  await registerRoutes(august, {
+    config: { ...CONFIG, usageStatsDataset: '2026-08' },
+    store: new Store(pool),
+    limiter: new RateLimiter(new Store(pool), 20),
+    fetch: (async () => new Response(JSON.stringify(RAW), { status: 200 })) as typeof globalThis.fetch,
+  });
+  const miss = await august.inject({ method: 'POST', url: '/v1/analyses', payload: SUBMIT });
+  assert.equal(miss.statusCode, 202, 'a different dataset must queue work rather than serve the cache');
+  await august.close();
 });
 
 test('a resubmission joins the live job instead of starting a second one', async () => {

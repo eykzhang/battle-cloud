@@ -13,7 +13,7 @@ import type { AnalysisIdentity, Profile } from './contract/index.ts';
  */
 
 const IDENTITY_COLUMNS = `replay_id, perspective, search_budget_ms_per_turn, opponent_samples,
-                          threads, usage_stats_cutoff, poke_engine_tag, seed`;
+                          threads, usage_stats_cutoff, usage_stats_dataset, poke_engine_tag, seed`;
 
 function identityValues(id: AnalysisIdentity): unknown[] {
   return [
@@ -23,6 +23,7 @@ function identityValues(id: AnalysisIdentity): unknown[] {
     id.opponentSamples,
     id.threads,
     id.usageStatsCutoff,
+    id.usageStatsDataset,
     id.pokeEngineTag,
     id.seed,
   ];
@@ -82,7 +83,7 @@ export class Store {
       `SELECT id, seed, created_at, document FROM analyses
         WHERE replay_id = $1 AND perspective = $2 AND search_budget_ms_per_turn = $3
           AND opponent_samples = $4 AND threads = $5 AND usage_stats_cutoff = $6
-          AND poke_engine_tag = $7 AND seed = $8`,
+          AND usage_stats_dataset = $7 AND poke_engine_tag = $8 AND seed = $9`,
       identityValues(id),
     );
     const row = rows[0];
@@ -152,7 +153,7 @@ export class Store {
   ): Promise<{ job: StoredJob; created: boolean }> {
     const { rows } = await this.pool.query(
       `INSERT INTO jobs (${IDENTITY_COLUMNS}, profile, estimated_turns, estimated_search_ms)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (${IDENTITY_COLUMNS}) WHERE status IN ('queued','running')
        DO UPDATE SET updated_at = jobs.updated_at
        RETURNING ${JOB_COLUMNS}, (xmax = 0) AS created`,
@@ -165,6 +166,37 @@ export class Store {
   async jobById(jobId: string): Promise<StoredJob | null> {
     const { rows } = await this.pool.query(`SELECT ${JOB_COLUMNS} FROM jobs WHERE id = $1`, [jobId]);
     return rows[0] === undefined ? null : toJob(rows[0]);
+  }
+
+  /**
+   * Count one submission against `clientKey`'s window, or refuse it.
+   *
+   * One statement, and it has to be one: the read and the increment are the same race
+   * that two API instances would otherwise lose. `DO UPDATE ... WHERE count < limit`
+   * makes Postgres decide, and a refused increment returns no row at all, which is the
+   * signal rather than a second query.
+   */
+  async consumeRateLimit(clientKey: string, windowStart: Date, limit: number): Promise<boolean> {
+    const { rows } = await this.pool.query(
+      `INSERT INTO rate_limit_windows (client_key, window_start, count)
+       VALUES ($1, $2, 1)
+       ON CONFLICT (client_key, window_start)
+       DO UPDATE SET count = rate_limit_windows.count + 1
+         WHERE rate_limit_windows.count < $3
+       RETURNING count`,
+      [clientKey, windowStart, limit],
+    );
+    return rows.length > 0;
+  }
+
+  /**
+   * Drop windows that have closed. Without it the table grows one row per distinct
+   * address per window forever, which is the same leak the in-memory version swept for,
+   * except durable.
+   */
+  async sweepRateLimits(before: Date): Promise<number> {
+    const { rowCount } = await this.pool.query('DELETE FROM rate_limit_windows WHERE window_start < $1', [before]);
+    return rowCount ?? 0;
   }
 
   async ping(): Promise<void> {

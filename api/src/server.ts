@@ -16,10 +16,11 @@ export async function buildServer(deps?: Partial<Parameters<typeof registerRoute
     // trusting them without one lets any caller spoof their own identity.
     trustProxy: false,
   });
+  const store = deps?.store ?? new Store(pool);
   await registerRoutes(app, {
     config,
-    store: deps?.store ?? new Store(pool),
-    limiter: deps?.limiter ?? new RateLimiter(config.submitRateLimitPerHour),
+    store,
+    limiter: deps?.limiter ?? new RateLimiter(store, config.submitRateLimitPerHour),
     fetch: deps?.fetch ?? globalThis.fetch,
   });
   app.addHook('onClose', async () => {

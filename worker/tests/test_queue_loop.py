@@ -62,14 +62,22 @@ def conn():
 @pytest.fixture
 def config():
     return WorkerConfig.from_env(
-        {"DATABASE_URL": DB_URL, "WORKER_CONCURRENCY": "1", "ENGINE_THREADS": "4"}, cpu_count=8
+        {
+            "DATABASE_URL": DB_URL,
+            "WORKER_CONCURRENCY": "1",
+            "ENGINE_THREADS": "4",
+            "POKE_ENGINE_TAG": "v0.0.48",
+            "USAGE_STATS_DATASET": "2026-07",
+        },
+        cpu_count=8,
     )
 
 
 def enqueue(conn, **over):
     params = dict(replay_id=REPLAY, perspective="p2", profile="ladder-parity",
                   search_budget_ms_per_turn=1000, opponent_samples=8, threads=4,
-                  usage_stats_cutoff=1500, poke_engine_tag="v0.0.48", seed=0,
+                  usage_stats_cutoff=1500, usage_stats_dataset="2026-07",
+                  poke_engine_tag="v0.0.48", seed=0,
                   estimated_turns=2, estimated_search_ms=2000)
     params.update(over)
     sql = (Path(__file__).resolve().parents[2] / "db" / "queries" / "enqueue_job.sql").read_text()
@@ -155,6 +163,57 @@ def test_a_degraded_run_is_recorded_on_the_analysis(conn, config):
         assert cur.fetchone() == (True, 60_000)
 
 
+def test_a_worker_leaves_a_job_built_for_another_engine_tag(conn, config):
+    """The identity asserts which engine produced the analysis. A worker on a different
+    tag cannot honor that, so it must leave the job rather than analyze it and store the
+    result under an identity it did not produce."""
+    job_id = enqueue(conn, poke_engine_tag="v0.0.49")
+    adapter = FakeAdapter()
+    assert Worker(config, adapter).run_once(conn) is False
+    assert adapter.calls == []
+    assert job_row(conn, job_id)["status"] == "queued"
+    assert job_row(conn, job_id)["attempts"] == 0, "an unclaimed job must not burn an attempt"
+
+
+def test_a_worker_leaves_a_job_built_for_another_usage_stats_dataset(conn, config):
+    """Same rule for the stats month. This is the one a rolling deploy actually hits,
+    since bumping the stats file changes the prior without changing any parameter."""
+    job_id = enqueue(conn, usage_stats_dataset="2026-08")
+    adapter = FakeAdapter()
+    assert Worker(config, adapter).run_once(conn) is False
+    assert adapter.calls == []
+    assert job_row(conn, job_id)["status"] == "queued"
+
+
+def test_the_stored_analysis_carries_the_dataset_it_was_produced_under(conn, config):
+    job_id = enqueue(conn)
+    Worker(config, FakeAdapter()).run_once(conn)
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT usage_stats_dataset FROM analyses")
+        assert cur.fetchone()["usage_stats_dataset"] == "2026-07"
+
+
+def test_two_analyses_of_one_replay_under_different_datasets_coexist(conn, config):
+    """Two rows, not a conflict. Before the dataset was part of the identity these two
+    collided, and the second silently overwrote the first."""
+    enqueue(conn)
+    Worker(config, FakeAdapter()).run_once(conn)
+    august = WorkerConfig.from_env(
+        {
+            "DATABASE_URL": DB_URL,
+            "POKE_ENGINE_TAG": "v0.0.48",
+            "USAGE_STATS_DATASET": "2026-08",
+            "ENGINE_THREADS": "4",
+        },
+        cpu_count=8,
+    )
+    enqueue(conn, usage_stats_dataset="2026-08")
+    Worker(august, FakeAdapter()).run_once(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT usage_stats_dataset FROM analyses ORDER BY usage_stats_dataset")
+        assert [row[0] for row in cur.fetchall()] == ["2026-07", "2026-08"]
+
+
 def test_two_workers_do_not_process_the_same_job(conn, config):
     enqueue(conn)
     enqueue(conn, seed=1)
@@ -165,3 +224,45 @@ def test_two_workers_do_not_process_the_same_job(conn, config):
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM analyses")
         assert cur.fetchone()[0] == 2
+
+
+def test_draining_an_empty_queue_processes_nothing_and_returns(conn, config):
+    adapter = FakeAdapter()
+    assert Worker(config, adapter).run_until_empty(conn) == 0
+    assert adapter.calls == []
+
+
+def test_draining_processes_every_queued_job_then_stops(conn, config):
+    for seed in (0, 1, 2):
+        enqueue(conn, seed=seed)
+    adapter = FakeAdapter()
+    assert Worker(config, adapter).run_until_empty(conn) == 3
+    assert len(adapter.calls) == 3
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM jobs WHERE status = 'succeeded'")
+        assert cur.fetchone()[0] == 3
+
+
+def test_draining_ignores_work_this_build_cannot_serve(conn, config):
+    """The exit condition is "nothing claimable by me", not "the queue is empty". A job
+    for another engine build would otherwise hold the task open forever."""
+    enqueue(conn, usage_stats_dataset="2026-08")
+    assert Worker(config, FakeAdapter()).run_until_empty(conn) == 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM jobs")
+        assert cur.fetchone()[0] == "queued"
+
+
+def test_draining_recovers_a_job_whose_worker_died(conn, config):
+    """A task that dies mid-analysis leaves a running job with a lease nobody renews. In
+    drain mode there may be no long-lived worker to notice, so the next task reclaims
+    before it decides the queue is empty."""
+    job_id = enqueue(conn)
+    Worker(config, FakeAdapter(failure=EngineFailure(ErrorKind.ENGINE_DATA_MISSING, "gone"))).run_once(conn)
+    conn.execute(
+        "UPDATE jobs SET status = 'running', claimed_by = 'dead', claimed_at = now(), "
+        "lease_expires_at = now() - interval '1 second' WHERE id = %s",
+        (job_id,),
+    )
+    assert Worker(config, FakeAdapter()).run_until_empty(conn) == 1
+    assert job_row(conn, job_id)["status"] == "succeeded"

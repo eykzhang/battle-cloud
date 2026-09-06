@@ -89,7 +89,10 @@ export async function registerRoutes(app: FastifyInstance, deps: Deps): Promise<
       return reply.code(status).send(body);
     }
     const submit = parsed.data;
-    const identity = deriveIdentity(submit, deps.config.pokeEngineTag);
+    const identity = deriveIdentity(submit, {
+      pokeEngineTag: deps.config.pokeEngineTag,
+      usageStatsDataset: deps.config.usageStatsDataset,
+    });
 
     // Cache first, before the rate limit: a hit costs one query, and charging for it
     // would penalize exactly the sharing the id-keyed design exists to encourage.
@@ -99,7 +102,7 @@ export async function registerRoutes(app: FastifyInstance, deps: Deps): Promise<
     }
 
     const clientKey = request.ip;
-    if (!deps.limiter.tryConsume(clientKey)) {
+    if (!(await deps.limiter.tryConsume(clientKey))) {
       const { status, body } = fail('rate_limited', 'submission rate exceeded');
       return reply.code(status).header('retry-after', deps.limiter.retryAfterSeconds(clientKey)).send(body);
     }

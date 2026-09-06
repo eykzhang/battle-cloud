@@ -23,7 +23,7 @@ under, so an analysis served by this API is comparable to one shipped in the app
 
 ## Analysis identity
 
-Eight fields. This tuple is the cache key and the unique constraint on the `analyses` table.
+Nine fields. This tuple is the cache key and the unique constraint on the `analyses` table.
 
 ```
 replayId              Showdown replay id, e.g. "gen9ou-2672899958"
@@ -32,9 +32,18 @@ searchBudgetMsPerTurn integer
 opponentSamples       integer
 threads               integer
 usageStatsCutoff      integer
+usageStatsDataset     string, e.g. "2026-07"
 pokeEngineTag         string, e.g. "v0.0.48"
 seed                  integer
 ```
+
+`usageStatsDataset` is the month of the cached usage-stats file the worker loaded, taken from
+the file's own name (`2026-07_gen9ou-1500.json`). It belongs here for the same reason
+`pokeEngineTag` does: usage stats drive opponent-team sampling, so a different month is a
+different prior and produces a different analysis from identical parameters. `usageStatsCutoff`
+does not cover this. The cutoff picks which file within a month, and every month has a 1500 file.
+Without the dataset in the identity, a deploy that bumped the stats file would silently serve
+analyses computed against one prior under cache keys created for another.
 
 Seven of these appear in the analysis document, six inside its `engine` block plus `perspective`
 and `replayId` at the top level. **`seed` does not.** `EngineConfiguration` in
@@ -63,6 +72,13 @@ running -> failed        (lease expired, attempts at the cap: dead letter)
 A job is claimed with `FOR UPDATE SKIP LOCKED`, which hands two racing workers different rows.
 A claim sets a lease expiry; a worker that dies has its job reclaimed when that lease expires
 rather than leaving it `running` forever.
+
+**A worker claims only jobs whose `pokeEngineTag` and `usageStatsDataset` match its own build.**
+The identity is a claim about which engine and which prior produced a document, and a worker
+carrying a different build cannot honor it. Without the filter such a worker would analyze the
+job anyway and store the result under an identity it did not produce, which is invisible in a
+single-version fleet and wrong during any rolling deploy. A job nothing can serve stays `queued`
+rather than being analyzed incorrectly.
 
 Submitting an identity that is already `queued` or `running` joins the existing job. It does not
 create a second one.

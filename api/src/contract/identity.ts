@@ -17,8 +17,14 @@ export const PERSPECTIVES = ['p1', 'p2'] as const;
 export type Perspective = (typeof PERSPECTIVES)[number];
 
 /**
- * The eight fields that identify an analysis. This is the cache key and the unique
+ * The nine fields that identify an analysis. This is the cache key and the unique
  * constraint on the `analyses` table.
+ *
+ * `usageStatsDataset` is the month of the cached usage-stats file the worker loaded. It
+ * is here for the same reason `pokeEngineTag` is: usage stats drive opponent-team
+ * sampling, so a different month is a different prior and a different analysis from
+ * identical parameters. `usageStatsCutoff` does not cover it, because the cutoff selects
+ * a file within a month and every month has a 1500 file.
  *
  * `seed` is here even though schema v1 does not carry it: `EngineConfiguration` in
  * battle-brain's `EngineService.swift` has five fields and the seed is not one of them,
@@ -33,6 +39,7 @@ export interface AnalysisIdentity {
   readonly opponentSamples: number;
   readonly threads: number;
   readonly usageStatsCutoff: number;
+  readonly usageStatsDataset: string;
   readonly pokeEngineTag: string;
   readonly seed: number;
 }
@@ -49,13 +56,25 @@ const IDENTITY_FIELDS = [
   'opponentSamples',
   'threads',
   'usageStatsCutoff',
+  'usageStatsDataset',
   'pokeEngineTag',
   'seed',
 ] as const satisfies readonly (keyof AnalysisIdentity)[];
 
+/**
+ * The half of the identity that comes from the deployed worker image rather than from
+ * the request. Both values must match what the worker was built from: a mismatch makes
+ * every submission miss the cache, and, since a worker refuses jobs it cannot reproduce,
+ * leaves them queued rather than analyzed.
+ */
+export interface EngineBuild {
+  readonly pokeEngineTag: string;
+  readonly usageStatsDataset: string;
+}
+
 export function deriveIdentity(
   request: { replayId: string; perspective: Perspective; profile: Profile },
-  pokeEngineTag: string,
+  build: EngineBuild,
 ): AnalysisIdentity {
   const params = PROFILES[request.profile];
   return {
@@ -65,7 +84,8 @@ export function deriveIdentity(
     opponentSamples: params.opponentSamples,
     threads: params.threads,
     usageStatsCutoff: params.usageStatsCutoff,
-    pokeEngineTag,
+    usageStatsDataset: build.usageStatsDataset,
+    pokeEngineTag: build.pokeEngineTag,
     seed: params.seed,
   };
 }

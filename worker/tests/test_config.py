@@ -4,7 +4,11 @@ import pytest
 
 from battle_cloud_worker.config import ConfigError, WorkerConfig
 
-BASE = {"DATABASE_URL": "postgres://x/y"}
+BASE = {
+    "DATABASE_URL": "postgres://x/y",
+    "POKE_ENGINE_TAG": "v0.0.48",
+    "USAGE_STATS_DATASET": "2026-07",
+}
 
 
 def test_defaults_are_accepted_on_a_machine_with_enough_cores():
@@ -13,11 +17,39 @@ def test_defaults_are_accepted_on_a_machine_with_enough_cores():
     assert cfg.threads == 4
     assert cfg.lease_seconds == 900
     assert cfg.max_attempts == 3
+    assert (cfg.poke_engine_tag, cfg.usage_stats_dataset) == ("v0.0.48", "2026-07")
+
+
+def test_the_default_mode_is_the_long_lived_one():
+    """Compose and any always-on deployment get the polling loop without saying so. Only
+    a per-burst task asks for drain."""
+    assert WorkerConfig.from_env(BASE, cpu_count=8).mode == "forever"
+
+
+def test_drain_mode_is_accepted():
+    assert WorkerConfig.from_env({**BASE, "WORKER_MODE": "drain"}, cpu_count=8).mode == "drain"
+
+
+def test_an_unknown_mode_is_rejected_rather_than_defaulted():
+    """A typo that silently fell back to `forever` would leave a task running until its
+    platform killed it, which is the one behavior scale-to-zero exists to avoid."""
+    with pytest.raises(ConfigError, match="WORKER_MODE"):
+        WorkerConfig.from_env({**BASE, "WORKER_MODE": "once"}, cpu_count=8)
 
 
 def test_a_missing_database_url_is_rejected():
     with pytest.raises(ConfigError, match="DATABASE_URL"):
         WorkerConfig.from_env({}, cpu_count=8)
+
+
+@pytest.mark.parametrize("key", ["POKE_ENGINE_TAG", "USAGE_STATS_DATASET"])
+def test_the_engine_build_must_be_declared(key):
+    """Both are identity fields and both gate which jobs this worker may claim. A default
+    would be a guess about what the image carries, and a wrong guess either claims nothing
+    or claims jobs this build cannot reproduce."""
+    env = {k: v for k, v in BASE.items() if k != key}
+    with pytest.raises(ConfigError, match=key):
+        WorkerConfig.from_env(env, cpu_count=8)
 
 
 @pytest.mark.parametrize("value", ["0", "-1"])

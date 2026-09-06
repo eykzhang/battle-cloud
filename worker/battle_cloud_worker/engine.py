@@ -17,6 +17,18 @@ from .telemetry import RunTelemetry, summarize
 STATS_SUBPATH = Path("data") / "usage_stats"
 
 
+def installed_datasets(data_dir: Path) -> set:
+    """The usage-stats months present under `data_dir`, read off the file names.
+
+    `2026-07_gen9ou-1500.json` gives `"2026-07"`. The engine selects its file by format
+    and cutoff and never looks at the month, so the file name is the only place the month
+    a worker actually carries is observable. A worker whose configured dataset is not in
+    this set would store analyses under an identity naming a prior it does not have.
+    """
+    stats_dir = Path(data_dir) / STATS_SUBPATH
+    return {path.name.split("_", 1)[0] for path in stats_dir.glob("*_*.json")}
+
+
 @dataclass(frozen=True)
 class AnalysisRun:
     document: Dict[str, Any]

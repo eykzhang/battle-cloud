@@ -7,7 +7,7 @@ TypeScript web client is the second half; `battle-brain`, the iOS app, is a seco
 
 ## Status
 
-It works end to end over HTTP. `POST /v1/analyses` with a replay id fetches that replay from
+134 tests: 50 in the API tier, 84 in Python. It works end to end over HTTP. `POST /v1/analyses` with a replay id fetches that replay from
 Showdown, queues a job, and a containerized worker running the real engine produces a
 schema-v1 analysis document that `GET /v1/analyses/{id}` serves back. Resubmitting the same
 identity returns the cached analysis rather than spending another core-minute.
@@ -17,15 +17,17 @@ Not built: the React web client, and any deployment. Nothing has a public URL.
 | Piece | State |
 |---|---|
 | `docs/contract.md` | written |
-| `api/src/contract/` | built, 16 tests |
+| `api/src/contract/` | built, 17 tests |
 | `api/src/replay/` | built, 13 tests |
-| `api/src/store.ts`, `ratelimit.ts` | built |
-| `worker/battle_cloud_worker/` | built, 34 tests, runs in the image |
-| `db/` | applied to Postgres 16.15, 31 tests |
-| `docker/worker.Dockerfile` | builds, 439 MB, gen9 guard passing |
-| `docker-compose.yml` | postgres + migrate + worker, verified |
-| `api/src/routes.ts` | built, 12 route tests against real Postgres |
-| `docker/api.Dockerfile` | written |
+| `api/src/store.ts` | built |
+| `api/src/ratelimit.ts` | built on Postgres, shared across instances, 6 tests |
+| `worker/battle_cloud_worker/` | built, 48 tests, polls or drains, runs in the image |
+| `db/` | three migrations applied to Postgres 16.15, 36 tests |
+| `docker/worker.Dockerfile` | builds, 103 MB pulled, gen9 guard passing |
+| `docker/migrate.Dockerfile` | builds, 56 MB pulled, no engine |
+| `docker-compose.yml` | postgres + migrate + api + worker, verified |
+| `api/src/routes.ts` | built, 14 route tests against real Postgres |
+| `docker/api.Dockerfile` | builds, 82 MB pulled |
 | web client | not started |
 | deployment | not started |
 

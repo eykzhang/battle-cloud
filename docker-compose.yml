@@ -33,17 +33,17 @@ services:
     profiles: ["migrate"]
     build:
       context: .
-      dockerfile: docker/worker.Dockerfile
-      additional_contexts:
-        engine: ../battle-engine
+      dockerfile: docker/migrate.Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://battlecloud:battlecloud@postgres:5432/battlecloud}
     volumes:
+      # Mounted so a new migration applies without a rebuild. The image carries its own
+      # copy for deployments, where there is no source tree.
       - ./db:/app/db:ro
-    command: ["python", "/app/db/migrate.py", "up"]
+    command: ["up"]
 
   api:
     build:
@@ -64,6 +64,10 @@ services:
       # built from. A mismatch misses the cache on every request rather than corrupting
       # anything, which makes it slow instead of wrong, and therefore easy to miss.
       POKE_ENGINE_TAG: ${POKE_ENGINE_TAG:-v0.0.48}
+      # Also part of the identity, and stricter than the tag: a worker claims only jobs
+      # whose dataset matches its own, so a wrong value here leaves submissions queued
+      # rather than merely uncached.
+      USAGE_STATS_DATASET: ${USAGE_STATS_DATASET:-2026-07}
     restart: unless-stopped
 
   worker:
@@ -77,6 +81,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://battlecloud:battlecloud@postgres:5432/battlecloud}
+      # `docker compose run --rm -e WORKER_MODE=drain worker` processes whatever is
+      # queued and exits, which is how the deployed per-burst task runs.
+      WORKER_MODE: ${WORKER_MODE:-forever}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       # One search in flight per process, with this many native Rust threads inside it.
       # WORKER_CONCURRENCY x ENGINE_THREADS must not exceed the host's cores: the search
@@ -85,6 +92,10 @@ services:
       ENGINE_THREADS: ${ENGINE_THREADS:-4}
       JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-900}
       JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-3}
+      # Left unset to use what the image baked in, which is what it was actually built
+      # with. Override only to make a worker refuse work it could otherwise serve.
+      POKE_ENGINE_TAG: ${POKE_ENGINE_TAG:-v0.0.48}
+      USAGE_STATS_DATASET: ${USAGE_STATS_DATASET:-2026-07}
     # Scale with `docker compose up --scale worker=N`, keeping N x ENGINE_THREADS at or
     # under the host's core count.
     restart: unless-stopped

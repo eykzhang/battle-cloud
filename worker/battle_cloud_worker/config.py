@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 
+#: How the process ends. `forever` polls until it is killed, which is what a long-lived
+#: container does. `drain` claims until the queue has nothing left for this build and then
+#: exits 0, which is what a task started per burst does: the queue is durable, so exiting
+#: early costs a job nothing but a wait for the next execution.
+MODES = ("forever", "drain")
+
+
 class ConfigError(ValueError):
     """A configuration value that would produce a broken worker, rejected at startup
     rather than at the first job."""
@@ -31,10 +38,20 @@ class WorkerConfig:
     `Path("data/usage_stats")`, relative to the process working directory, and
     `analyze_replay` exposes no `stats_dir` override. A caller therefore cannot inject the
     path through the public API and has to control the working directory instead.
+
+    `poke_engine_tag` and `usage_stats_dataset` describe the engine build this worker
+    carries. They are not preferences: a worker claims only jobs whose identity names this
+    build, because the identity asserts what produced a document and a worker on a
+    different build cannot honor that assertion. Both are set in the image from the same
+    build arguments that select the wheel and the stats file, and both are required, since
+    a worker that guessed would either claim nothing or claim jobs it cannot reproduce.
     """
 
     database_url: str
     engine_data_dir: Path
+    mode: str
+    poke_engine_tag: str
+    usage_stats_dataset: str
     concurrency: int
     threads: int
     lease_seconds: int
@@ -48,6 +65,18 @@ class WorkerConfig:
         database_url = env.get("DATABASE_URL", "")
         if not database_url:
             raise ConfigError("DATABASE_URL is required")
+
+        mode = env.get("WORKER_MODE") or "forever"
+        if mode not in MODES:
+            raise ConfigError(f"WORKER_MODE must be one of {', '.join(MODES)}, got {mode!r}")
+
+        poke_engine_tag = env.get("POKE_ENGINE_TAG", "")
+        if not poke_engine_tag:
+            raise ConfigError("POKE_ENGINE_TAG is required; it is part of the analysis identity")
+
+        usage_stats_dataset = env.get("USAGE_STATS_DATASET", "")
+        if not usage_stats_dataset:
+            raise ConfigError("USAGE_STATS_DATASET is required; it is part of the analysis identity")
 
         concurrency = _int(env, "WORKER_CONCURRENCY", 1)
         if concurrency < 1:
@@ -77,6 +106,9 @@ class WorkerConfig:
 
         return WorkerConfig(
             database_url=database_url,
+            mode=mode,
+            poke_engine_tag=poke_engine_tag,
+            usage_stats_dataset=usage_stats_dataset,
             engine_data_dir=Path(env.get("ENGINE_DATA_DIR", ".")),
             concurrency=concurrency,
             threads=threads,
