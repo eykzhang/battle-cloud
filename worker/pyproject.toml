@@ -1,0 +1,19 @@
+[project]
+name = "battle-cloud-worker"
+version = "0.1.0"
+description = "Process-isolated worker that runs battle-engine replay analysis for battle-cloud"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+# The engine itself is installed in the worker image from a pinned git ref, not from PyPI.
+# It is deliberately absent from `dependencies` so this package stays installable and
+# testable without the compiled gen9 poke-engine extension.
+engine = ["battle-engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["battle_cloud_worker*"]
