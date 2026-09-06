@@ -1,6 +1,6 @@
 # Plan: battle-cloud foundation (worker core, API core, schema, containers)
 **Created:** 2026-09-06
-**Status:** in progress -- Phases 1-6 built and verified; API server, web client, and deploy remain
+**Status:** in progress -- the full submit-analyze-serve loop works over HTTP; web client and deploy remain
 **Complexity:** complex
 **Review cadence:** 3
 ---
@@ -432,3 +432,53 @@ shape: a check that reports success for the case it exists to catch.
 
 Still open: **S14** (tests read fixtures from `../battle-brain`, which CI will not have),
 **S2**, **S3**, **S6**, **S7**, **S8**, **S13**.
+
+
+### 2026-09-06, later still — the API server, and the loop closed
+
+`POST /v1/analyses` -> queued job -> containerized worker -> `GET /v1/analyses/{id}` works
+end to end, verified against the compose stack with the replay fetched live from Showdown:
+
+```
+POST /v1/analyses {"replayId":"gen9ou-2672927429","perspective":"p2","profile":"quick"}
+  -> 202 {"jobId":"...","status":"queued","estimatedTurns":24,"estimatedSearchMs":4800}
+  -> worker claimed, analyzed, succeeded in 8.4s
+GET  /v1/analyses/be764f3c-...
+  -> schemaVersion 1, 24 turns, 16 gradable, turn 1 winProbability 0.5158,
+     20 topActions on turn 1 (untruncated), rating 1645 and players preserved
+POST the same body again -> 200, the cached analysis, no second job
+```
+
+Built this stretch: `api/src/config.ts`, `store.ts`, `ratelimit.ts`, `routes.ts`,
+`server.ts`, plus `docker/api.Dockerfile` and an `api` service in compose. 12 route tests
+against real Postgres with an injected fetch, so no test touches the network.
+
+**Test counts:** 41 API, 34 worker, 31 database. 106 total.
+
+Two implementation notes worth carrying forward:
+
+- **Node's strip-only TypeScript rejects constructor parameter properties.** `Store` and
+  `RateLimiter` both used them and both failed at import in the test runner, though `tsc
+  --noEmit` was perfectly happy. Typecheck passing is not evidence that Node will run the
+  file. Fields are written out explicitly now, and `docker/api.Dockerfile` has a build step
+  that imports a source file so the image cannot ship syntax the runtime rejects.
+- **Rate limiting is in-memory and therefore per-instance.** Two API instances each enforce
+  their own window. It is sized to stop one address queueing hundreds of core-minutes, not
+  to be a quota, and it is the first thing that must move to Postgres if the service is ever
+  public or horizontally scaled. Said in the module rather than left to be discovered.
+
+### Review findings closed
+
+**S13** (nothing user-observable) is closed by the API itself. **S14** (cross-repo fixtures)
+is closed: the six analyses and six replay payloads are copied into `api/test/fixtures/` with
+a provenance README, and no test reads `../battle-brain` any more.
+
+Still open: **S2**, **S3**, **S6**, **S7**, **S8**.
+
+### What is genuinely not done
+
+- The React and TypeScript web client. Nothing has been started.
+- Deployment. Nothing has a public URL, so the DevOps gap this project targets is not closed
+  yet by the project's own standard.
+- CI. No GitHub Actions workflow exists, so nothing runs these 106 tests except by hand.
+- `battle-brain`'s `HostedEngineService`. The seam analysis is written; no Swift is.

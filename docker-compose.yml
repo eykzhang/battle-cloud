@@ -4,8 +4,8 @@
 #   docker compose --profile migrate run --rm migrate
 #   docker compose up worker
 #
-# The API tier has no server yet, so it has no service here. Adding one is a service
-# block and an image, not a change to anything below.
+# `up` starts postgres, the API on :8080, and one worker. `migrate` is a one-shot under
+# its own profile so `up` does not report it as an exited service.
 
 services:
   postgres:
@@ -44,6 +44,27 @@ services:
     volumes:
       - ./db:/app/db:ro
     command: ["python", "/app/db/migrate.py", "up"]
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://battlecloud:battlecloud@postgres:5432/battlecloud}
+      SHOWDOWN_BASE_URL: ${SHOWDOWN_BASE_URL:-https://replay.pokemonshowdown.com/}
+      REPLAY_MAX_BYTES: ${REPLAY_MAX_BYTES:-5242880}
+      REPLAY_TIMEOUT_MS: ${REPLAY_TIMEOUT_MS:-20000}
+      SUBMIT_RATE_LIMIT_PER_HOUR: ${SUBMIT_RATE_LIMIT_PER_HOUR:-20}
+      # Part of the analysis identity, so it must match the tag the worker image was
+      # built from. A mismatch misses the cache on every request rather than corrupting
+      # anything, which makes it slow instead of wrong, and therefore easy to miss.
+      POKE_ENGINE_TAG: ${POKE_ENGINE_TAG:-v0.0.48}
+    restart: unless-stopped
 
   worker:
     build:

@@ -7,21 +7,25 @@ TypeScript web client is the second half; `battle-brain`, the iOS app, is a seco
 
 ## Status
 
-The worker half runs end to end. Submit a job against a stored replay and a containerized
-worker produces a real schema-v1 analysis document and stores it. The API tier has its typed
-contract and its Showdown client but no HTTP server yet, so nothing is reachable over a
-network.
+It works end to end over HTTP. `POST /v1/analyses` with a replay id fetches that replay from
+Showdown, queues a job, and a containerized worker running the real engine produces a
+schema-v1 analysis document that `GET /v1/analyses/{id}` serves back. Resubmitting the same
+identity returns the cached analysis rather than spending another core-minute.
+
+Not built: the React web client, and any deployment. Nothing has a public URL.
 
 | Piece | State |
 |---|---|
 | `docs/contract.md` | written |
 | `api/src/contract/` | built, 16 tests |
 | `api/src/replay/` | built, 13 tests |
+| `api/src/store.ts`, `ratelimit.ts` | built |
 | `worker/battle_cloud_worker/` | built, 34 tests, runs in the image |
 | `db/` | applied to Postgres 16.15, 31 tests |
 | `docker/worker.Dockerfile` | builds, 439 MB, gen9 guard passing |
 | `docker-compose.yml` | postgres + migrate + worker, verified |
-| API HTTP server | not started |
+| `api/src/routes.ts` | built, 12 route tests against real Postgres |
+| `docker/api.Dockerfile` | written |
 | web client | not started |
 | deployment | not started |
 
@@ -32,25 +36,51 @@ this one.
 
 ```
 cp .env.example .env
-docker compose build worker
+docker compose build
 docker compose up -d postgres
 docker compose --profile migrate run --rm migrate
-docker compose up worker
+docker compose up -d api worker
+
+curl -X POST localhost:8080/v1/analyses \
+  -H 'content-type: application/json' \
+  -d '{"replayId":"gen9ou-2672927429","perspective":"p2","profile":"quick"}'
+# -> 202 {"jobId": "...", "status": "queued", "estimatedTurns": 24, ...}
+
+curl localhost:8080/v1/jobs/<jobId>          # poll until succeeded
+curl localhost:8080/v1/analyses/<analysisId> # the schema-v1 document
 ```
 
-The worker polls for jobs. Nothing enqueues one yet without the API, so insert a replay row
-and a job row by hand to watch it work; `db/README.md` has the schema.
+A `quick` analysis of a 24-turn replay takes about 8 seconds. `ladder-parity`, which matches
+the settings the iOS app's bundled fixtures were generated under, takes about 36 seconds for
+the same replay and a little over two minutes for a 93-turn one.
+
+## API
+
+| Route | Behavior |
+|---|---|
+| `POST /v1/analyses` | 200 with the analysis if this identity is already computed, else 202 with a job handle. Resubmitting a live identity joins its job. |
+| `GET /v1/analyses/{analysisId}` | The envelope: `analysisId`, `seed`, `createdAt`, and the untouched schema-v1 `document`. |
+| `GET /v1/jobs/{jobId}` | Status, estimated turns, estimated search time, and the analysis id once it exists. |
+| `GET /healthz`, `GET /readyz` | Liveness, and liveness plus a database round trip. |
+
+Clients name a `profile` (`ladder-parity` or `quick`) rather than sending search parameters,
+so no caller picks how much CPU this server spends. `docs/contract.md` has the expansions,
+the eight-field analysis identity, the job states, and the error vocabulary.
 
 ## Tests
 
 ```
-npm --prefix api install && npm --prefix api test          # 29
-DATABASE_URL=postgres:///battlecloud python -m pytest db/tests worker/tests -q   # 65
+createdb battlecloud
+DATABASE_URL=postgres:///battlecloud python db/migrate.py up
+
+npm --prefix api install && npm --prefix api test                     # 41
+DATABASE_URL=postgres:///battlecloud python -m pytest -q              # 65
 ```
 
-The database tests need a local Postgres and an applied migration. They are not mocked: the
-`SKIP LOCKED` behavior in particular cannot be verified by reading SQL, so it is executed
-across two real connections.
+Both suites need a local Postgres with the migration applied, and neither mocks it. `SKIP
+LOCKED` in particular cannot be verified by reading SQL, so it is executed across two real
+connections, and the route tests run against real rows rather than a fake store. Nothing in
+either suite touches the network: the Showdown client is exercised through an injected fetch.
 
 ## Repository setup
 

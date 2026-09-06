@@ -9,7 +9,7 @@ import { SchemaV1DocumentSchema, SubmitRequestSchema } from '../../src/contract/
  * against a hand-written sample is the point: a schema written from the Swift struct
  * alone would not have caught that the real documents carry `rating` and `players`.
  */
-const FIXTURE_DIR = new URL('../../../../battle-brain/BattleBrain/Resources/analysis/', import.meta.url).pathname;
+const FIXTURE_DIR = new URL('../fixtures/analysis/', import.meta.url).pathname;
 
 function fixtures(): { name: string; doc: unknown }[] {
   return readdirSync(FIXTURE_DIR)

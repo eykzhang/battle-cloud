@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { estimateTurns, estimateDuration } from '../../src/replay/index.ts';
 
-const BRAIN = new URL('../../../../battle-brain/BattleBrain/Resources/', import.meta.url).pathname;
+const BRAIN = new URL('../fixtures/', import.meta.url).pathname;
 const ANALYSIS_DIR = join(BRAIN, 'analysis');
 const REPLAY_DIR = join(BRAIN, 'replays');
 
