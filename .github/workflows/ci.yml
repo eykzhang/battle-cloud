@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: battlecloud
+          POSTGRES_PASSWORD: battlecloud
+          POSTGRES_DB: battlecloud
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U battlecloud -d battlecloud"
+          --health-interval 2s --health-timeout 3s --health-retries 15
+    env:
+      DATABASE_URL: postgres://battlecloud:battlecloud@localhost:5432/battlecloud
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply migrations
+        run: |
+          pip install "psycopg[binary]"
+          python db/migrate.py up
+
+      # The route and queue tests run against this Postgres rather than a fake. SKIP
+      # LOCKED's behavior under concurrency cannot be verified by reading SQL.
+      - name: API tests
+        run: |
+          npm --prefix api ci
+          npm --prefix api run typecheck
+          npm --prefix api test
+
+      - name: Python tests
+        run: |
+          pip install pytest
+          python -m pytest -q
+
+  api-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          push: false
+
+  # The worker image is deliberately not built here.
+  #
+  # It needs a `battle-engine` checkout as a named build context, and that repository is
+  # not public. Building it in CI means giving this workflow credentials to a second
+  # private repo, which is a real decision about blast radius rather than a missing step.
+  #
+  # What that costs: the gen9 guard runs only on a developer's machine. The failure it
+  # catches is silent (a gen4 poke-engine build simulates gen9ou with no error), so the
+  # guard matters, and running it only locally is weaker than running it here. Options,
+  # none taken yet: a deploy key scoped to battle-engine, publishing a prebuilt worker
+  # image to a registry from a machine that already has both checkouts, or vendoring the
+  # engine's analysis subset into this repo.
+  worker-image:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "see the comment above"
