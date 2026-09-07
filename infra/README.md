@@ -25,19 +25,35 @@ about $0.30 a month. IAM and the OIDC provider are free.
 Needs Terraform 1.9 or newer and credentials for the account with permission to create IAM
 roles. There is no CI apply and no remote state yet, so this runs from a laptop.
 
+Terraform runs on the host here, not in a container. The laptop authenticates with `aws
+login`, whose session the AWS provider cannot read, so the provider gets credentials by
+shelling out to the CLI instead. Add this profile to `~/.aws/config` once:
+
+```
+[profile tf]
+region = us-east-2
+credential_process = aws configure export-credentials --profile default --format process
+```
+
+Nothing is written to disk by that, and it keeps working across a re-login as a different
+identity. See `notes/gotcha-aws-login-sessions-are-invisible-to-terraform.md`.
+
 ```
 cd infra
-terraform init
-terraform plan      # read it; IAM roles are the part worth reading
-terraform apply
+AWS_PROFILE=tf terraform init
+AWS_PROFILE=tf terraform plan      # read it; IAM roles are the part worth reading
+AWS_PROFILE=tf terraform apply
 ```
+
+Applied 2026-09-07 into account `618426070248`: nine resources, and the three CI variables
+below are set.
 
 Then wire CI to it, using the outputs:
 
 ```
 gh variable set AWS_ROLE_ARN  --body "$(terraform output -raw github_actions_role_arn)"
 gh variable set ECR_REGISTRY  --body "$(terraform output -raw ecr_registry)"
-gh variable set AWS_REGION    --body "us-east-1"
+gh variable set AWS_REGION    --body "us-east-2"
 ```
 
 The `mirror-to-ecr` job in `.github/workflows/ci.yml` is skipped while `AWS_ROLE_ARN` is

@@ -259,13 +259,13 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-2' }}
 
       - name: Authenticate to both registries
         run: |
           set -euo pipefail
           crane auth login ghcr.io -u '${{ github.actor }}' -p '${{ secrets.GITHUB_TOKEN }}'
-          aws ecr get-login-password --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
+          aws ecr get-login-password --region "${{ vars.AWS_REGION || 'us-east-2' }}" \
             | crane auth login "$REGISTRY" -u AWS --password-stdin
 
       - name: Copy each image

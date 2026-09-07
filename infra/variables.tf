@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "Region for every resource here. ECR is regional, and a deploy pulls from the registry in its own region, so this has to match wherever the worker tasks end up running."
   type        = string
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 variable "github_repository" {
