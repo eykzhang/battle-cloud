@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { registerRoutes } from '../src/routes.ts';
 import { Store } from '../src/store.ts';
 import { RateLimiter } from '../src/ratelimit.ts';
+import { NO_LAUNCHER, type WorkerLauncher } from '../src/worker.ts';
 import type { ApiConfig } from '../src/config.ts';
 
 // TEST_DATABASE_URL first so a developer can point the suite at a scratch database
@@ -27,6 +28,7 @@ const CONFIG: ApiConfig = {
   submitRateLimitPerHour: 20,
   pokeEngineTag: 'v0.0.48',
   usageStatsDataset: '2026-07',
+  workerLaunch: null,
 };
 
 let pool: pg.Pool;
@@ -45,7 +47,9 @@ beforeEach(async () => {
 });
 
 /** A server whose only non-real dependency is the network. */
-async function server(opts: { fetch?: typeof globalThis.fetch; limit?: number } = {}): Promise<FastifyInstance> {
+async function server(
+  opts: { fetch?: typeof globalThis.fetch; limit?: number; launcher?: WorkerLauncher } = {},
+): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const fetchImpl =
     opts.fetch ?? (async () => new Response(JSON.stringify(RAW), { status: 200 }));
@@ -54,6 +58,7 @@ async function server(opts: { fetch?: typeof globalThis.fetch; limit?: number } 
     store: new Store(pool),
     limiter: new RateLimiter(new Store(pool), opts.limit ?? 20),
     fetch: fetchImpl as typeof globalThis.fetch,
+    launcher: opts.launcher ?? NO_LAUNCHER,
   });
   return app;
 }
@@ -132,6 +137,7 @@ test('a cached analysis from another dataset is not served for this one', async 
     store: new Store(pool),
     limiter: new RateLimiter(new Store(pool), 20),
     fetch: (async () => new Response(JSON.stringify(RAW), { status: 200 })) as typeof globalThis.fetch,
+    launcher: NO_LAUNCHER,
   });
   const miss = await august.inject({ method: 'POST', url: '/v1/analyses', payload: SUBMIT });
   assert.equal(miss.statusCode, 202, 'a different dataset must queue work rather than serve the cache');
@@ -281,5 +287,47 @@ test('an analysis is retrievable by its own id', async () => {
   const res = await app.inject({ method: 'GET', url: `/v1/analyses/${analysisId}` });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.json().document, ANALYSIS);
+  await app.close();
+});
+
+test('a queued job starts a worker, and a job already being worked does not', async () => {
+  let launches = 0;
+  const launcher: WorkerLauncher = {
+    async ensureRunning() {
+      launches += 1;
+    },
+  };
+  const app = await server({ launcher });
+
+  const first = await app.inject({ method: 'POST', url: '/v1/analyses', payload: SUBMIT });
+  assert.equal(first.statusCode, 202);
+  assert.equal(launches, 1, 'a newly queued job should start a worker');
+
+  // What a worker claiming the job does. The resubmit below joins it rather than creating
+  // a second, and a second task would then pay a 4 vCPU minute to find nothing claimable.
+  await pool.query("UPDATE jobs SET status = 'running'");
+
+  const second = await app.inject({ method: 'POST', url: '/v1/analyses', payload: SUBMIT });
+  assert.equal(second.statusCode, 202);
+  assert.equal(JSON.parse(second.body).created, false, 'setup: the resubmit must join the live job');
+  assert.equal(launches, 1, 'a job already running should not start another worker');
+
+  await app.close();
+});
+
+test('a launcher that fails does not fail the submission', async () => {
+  // The job is durably enqueued before the launcher is called, so an ECS problem is a
+  // delay until the sweep. The launcher swallows its own errors; this asserts the route
+  // does not depend on that being true.
+  const launcher: WorkerLauncher = {
+    async ensureRunning() {
+      throw new Error('ecs is down');
+    },
+  };
+  const app = await server({ launcher });
+
+  const res = await app.inject({ method: 'POST', url: '/v1/analyses', payload: SUBMIT });
+  assert.equal(res.statusCode, 202, 'the submission was accepted and stored; it did not fail');
+
   await app.close();
 });

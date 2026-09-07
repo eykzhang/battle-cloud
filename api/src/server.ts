@@ -4,6 +4,7 @@ import { loadConfig, ConfigError } from './config.ts';
 import { Store } from './store.ts';
 import { RateLimiter } from './ratelimit.ts';
 import { registerRoutes } from './routes.ts';
+import { createWorkerLauncher } from './worker.ts';
 
 export async function buildServer(deps?: Partial<Parameters<typeof registerRoutes>[1]>) {
   const config = deps?.config ?? loadConfig();
@@ -22,6 +23,7 @@ export async function buildServer(deps?: Partial<Parameters<typeof registerRoute
     store,
     limiter: deps?.limiter ?? new RateLimiter(store, config.submitRateLimitPerHour),
     fetch: deps?.fetch ?? globalThis.fetch,
+    launcher: deps?.launcher ?? createWorkerLauncher(config.workerLaunch, app.log),
   });
   app.addHook('onClose', async () => {
     await pool.end();

@@ -20,9 +20,64 @@ export interface ApiConfig {
    * matches its own, so a wrong value here leaves every submission queued.
    */
   readonly usageStatsDataset: string;
+  /**
+   * How to start a worker after enqueueing, or `null` for a deployment that has no way to.
+   * Compose and the test suite are the second case: there is no ECS to call, and the
+   * scheduled sweep covers a real deployment that omits this.
+   */
+  readonly workerLaunch: WorkerLaunchConfig | null;
+}
+
+export interface WorkerLaunchConfig {
+  readonly cluster: string;
+  readonly taskDefinition: string;
+  readonly subnetIds: readonly string[];
+  readonly securityGroup: string;
+  readonly maxTasks: number;
 }
 
 export class ConfigError extends Error {}
+
+const WORKER_LAUNCH_KEYS = [
+  'WORKER_CLUSTER',
+  'WORKER_TASK_DEFINITION',
+  'WORKER_SUBNET_IDS',
+  'WORKER_SECURITY_GROUP',
+] as const;
+
+/**
+ * All of them or none of them.
+ *
+ * A partially-set group is the failure this rejects: the trigger would quietly do nothing
+ * and every submission would wait for the hourly sweep, while both tiers reported healthy
+ * and the queue drained eventually. That is the same shape of silent failure the engine
+ * identity fields exist to prevent, and it deserves the same treatment, which is refusing
+ * to start rather than guessing.
+ */
+function loadWorkerLaunch(env: NodeJS.ProcessEnv): WorkerLaunchConfig | null {
+  const present = WORKER_LAUNCH_KEYS.filter((key) => (env[key] ?? '') !== '');
+  if (present.length === 0) return null;
+  if (present.length !== WORKER_LAUNCH_KEYS.length) {
+    const missing = WORKER_LAUNCH_KEYS.filter((key) => (env[key] ?? '') === '');
+    throw new ConfigError(
+      `worker launch is partially configured: ${present.join(', ')} set, ${missing.join(', ')} missing. ` +
+        'Set all of them to start workers on submission, or none to leave it to the scheduled sweep.',
+    );
+  }
+
+  const subnetIds = (env['WORKER_SUBNET_IDS'] ?? '').split(',').map((id) => id.trim()).filter((id) => id !== '');
+  if (subnetIds.length === 0) {
+    throw new ConfigError('WORKER_SUBNET_IDS must list at least one subnet');
+  }
+
+  return {
+    cluster: env['WORKER_CLUSTER'] as string,
+    taskDefinition: env['WORKER_TASK_DEFINITION'] as string,
+    subnetIds,
+    securityGroup: env['WORKER_SECURITY_GROUP'] as string,
+    maxTasks: int(env, 'WORKER_MAX_TASKS', 2),
+  };
+}
 
 function int(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
   const raw = env[key];
@@ -46,5 +101,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     submitRateLimitPerHour: int(env, 'SUBMIT_RATE_LIMIT_PER_HOUR', 20),
     pokeEngineTag: env['POKE_ENGINE_TAG'] ?? 'v0.0.48',
     usageStatsDataset: env['USAGE_STATS_DATASET'] ?? '2026-07',
+    workerLaunch: loadWorkerLaunch(env),
   };
 }

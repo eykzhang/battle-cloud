@@ -12,6 +12,7 @@
     "test": "node --test --experimental-strip-types 'test/**/*.test.ts'"
   },
   "dependencies": {
+    "@aws-sdk/client-ecs": "^3.1127.0",
     "fastify": "^5.12.3",
     "pg": "^8.23.0",
     "zod": "^3.23.8"

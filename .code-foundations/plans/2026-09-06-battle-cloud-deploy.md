@@ -292,3 +292,44 @@ that exists the sweep is the only trigger, which means up to an hour of latency.
 Also unresolved and now live rather than theoretical: `trustProxy` is off, so behind App
 Runner every client will share one rate-limit bucket. It has to go on together with a proxy
 whose forwarded headers can be trusted.
+
+### 2026-09-07 — 3.2, the RunTask trigger
+
+`api/src/worker.ts`. The API counts in-flight worker tasks and starts one when a submission
+leaves a job `queued`, which closes the gap where the hourly sweep was the only trigger and
+a submission could wait an hour.
+
+Four things are worth keeping.
+
+**The trigger fires only for a job that is actually waiting.** A resubmit that joins a job
+already `running` starts nothing, because a worker is on it and a second task would pay a
+four-vCPU minute to find nothing claimable.
+
+**Pending tasks count against the cap.** `ListTasks` is called with `desiredStatus: RUNNING`,
+which includes tasks that are still PENDING, because pending describes where a task is
+rather than where it is going. Counting only what is already running would start a second
+worker during the 16.8 seconds the first spends attaching an ENI and pulling its image,
+which is exactly the window a burst arrives in.
+
+**A launch failure cannot fail a submission, and that is enforced twice.** The launcher
+swallows and logs everything, and the route also catches. The second one is not redundant:
+the job is durably enqueued before the launcher is called, so the submission has already
+succeeded, and depending on a collaborator to never throw is a contract no type enforces.
+A test asserted the route's behavior directly and caught that it did not hold, since the
+route had been awaiting the call bare.
+
+**A partially-configured trigger is refused at startup.** All four of `WORKER_CLUSTER`,
+`WORKER_TASK_DEFINITION`, `WORKER_SUBNET_IDS`, and `WORKER_SECURITY_GROUP` or none. One
+missing variable would otherwise produce a trigger that quietly does nothing while every
+submission waited for the sweep and both tiers reported healthy, which is the same silent
+failure shape the identity fields exist to prevent.
+
+There is also a two-second ceiling on how long a submission waits for ECS, so an unreachable
+control plane costs latency rather than a hung request.
+
+**Tests: 147.** 61 API, up from 50: nine for the launcher and its configuration, two for the
+route's firing condition and its independence from a failing launcher. 86 Python, unchanged.
+Both suites now run against Neon rather than compose.
+
+Not verified, and cannot be until App Runner exists: that the instance role's `ecs:RunTask`
+and `iam:PassRole` grants are sufficient in practice. The policy is written and unexercised.

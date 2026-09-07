@@ -9,12 +9,14 @@ import { estimateDuration, estimateTurns, fetchReplay, ReplayFetchError, type Re
 import type { ApiConfig } from './config.ts';
 import type { Store, StoredAnalysis, StoredJob } from './store.ts';
 import type { RateLimiter } from './ratelimit.ts';
+import type { WorkerLauncher } from './worker.ts';
 
 export interface Deps {
   readonly config: ApiConfig;
   readonly store: Store;
   readonly limiter: RateLimiter;
   readonly fetch: typeof globalThis.fetch;
+  readonly launcher: WorkerLauncher;
 }
 
 /** HTTP status per error kind. One table, so a kind cannot map two ways. */
@@ -141,6 +143,21 @@ export async function registerRoutes(app: FastifyInstance, deps: Deps): Promise<
       estimatedTurns,
       estimateDuration(estimatedTurns, submit.profile as Profile),
     );
+    // Only for a job still waiting. A resubmit that joined a job already `running` has a
+    // worker on it, and starting a second one would pay a 4 vCPU minute to claim nothing.
+    //
+    // The catch is not redundant with the launcher swallowing its own failures. The job is
+    // durably enqueued by the line above, so from here on the submission has succeeded and
+    // nothing about starting a worker early can be allowed to say otherwise. Depending on a
+    // collaborator to never throw is a contract no type enforces, and the cost of being
+    // wrong is a 500 telling a client its accepted job failed while a worker picks it up
+    // anyway.
+    if (job.status === 'queued') {
+      await deps.launcher.ensureRunning().catch((cause: unknown) => {
+        request.log.warn({ err: String(cause), jobId: job.id }, 'worker launch threw; the sweep covers it');
+      });
+    }
+
     // 202 either way. A resubmit that joined a live job is not an error, and the client
     // polls the same handle regardless of which call created it.
     return reply.code(202).header('location', `/v1/jobs/${job.id}`).send({ ...jobView(job), created });
