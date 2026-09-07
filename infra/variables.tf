@@ -21,3 +21,15 @@ variable "image_retention_count" {
   type        = number
   default     = 10
 }
+
+variable "github_owner_id" {
+  description = "GitHub's immutable numeric id for the repository owner. Part of the OIDC subject a workflow run presents, and it does not change when the account is renamed. Read it with `gh api repos/<owner>/<repo> --jq .owner.id`."
+  type        = number
+  default     = 214009084
+}
+
+variable "github_repository_id" {
+  description = "GitHub's immutable numeric id for the repository itself, the second half of the OIDC subject. Read it with `gh api repos/<owner>/<repo> --jq .id`."
+  type        = number
+  default     = 1359218725
+}
