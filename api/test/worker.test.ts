@@ -97,7 +97,11 @@ test('a failure to start does not reach the caller', async () => {
 });
 
 test('an ECS that never answers bounds what the submission waits', async () => {
-  const ecs: EcsLike = { send: () => new Promise(() => {}) };
+  // Settled explicitly at the end rather than left hanging. A promise that never resolves
+  // outlives the test, and the runner reports that as a failure of whichever test happens
+  // to be last, which is a considerably worse thing to debug than this line is to write.
+  let answer: (value: unknown) => void = () => {};
+  const ecs: EcsLike = { send: () => new Promise((resolve) => { answer = resolve; }) };
   const { log, lines } = recorder();
 
   const started = Date.now();
@@ -107,6 +111,8 @@ test('an ECS that never answers bounds what the submission waits', async () => {
   assert.ok(waited < 1_000, `expected the timeout to fire, waited ${waited}ms`);
   assert.equal(lines.at(-1)?.level, 'warn');
   assert.match(JSON.stringify(lines.at(-1)?.payload ?? {}), /did not answer/);
+
+  answer({ taskArns: [] });
 });
 
 test('no worker variables means no trigger, which is what compose runs', () => {

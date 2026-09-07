@@ -59,29 +59,30 @@ export class EcsWorkerLauncher implements WorkerLauncher {
   }
 
   async ensureRunning(): Promise<void> {
+    // Held so the timer can be cleared whichever side of the race wins. Leaving it armed
+    // keeps the event loop alive for the rest of the timeout on every successful launch,
+    // which in a test runner surfaces as a pending promise outliving its test and in a
+    // container is a process that will not exit when asked.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expire = new Promise<never>((_resolve, reject) => {
+      // Rejects rather than resolves, so a timeout reaches the same warning as any other
+      // failure. Resolving would report a launch that did not happen as one that did.
+      timer = setTimeout(
+        () => reject(new Error(`ECS did not answer within ${this.#timeoutMs}ms`)),
+        this.#timeoutMs,
+      );
+    });
+
     try {
-      await Promise.race([this.#attempt(), this.#expire()]);
+      await Promise.race([this.#attempt(), expire]);
     } catch (cause) {
       this.#log.warn(
         { err: cause instanceof Error ? cause.message : String(cause) },
         'worker launch failed; the scheduled sweep will pick the job up',
       );
+    } finally {
+      clearTimeout(timer);
     }
-  }
-
-  /**
-   * Rejects rather than resolves, so a timeout reaches the same warning as any other
-   * failure. Resolving would report a launch that did not happen as one that did.
-   */
-  #expire(): Promise<never> {
-    return new Promise((_resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`ECS did not answer within ${this.#timeoutMs}ms`)),
-        this.#timeoutMs,
-      );
-      // Nothing should be held open by a race the other side already won.
-      timer.unref?.();
-    });
   }
 
   async #attempt(): Promise<void> {
