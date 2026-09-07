@@ -246,3 +246,49 @@ assumption, and the mirror job.
 Still open before Stage 3 can finish: the AWS account itself, a Neon project and its connection
 string, then the App Runner service, the Fargate task definition, the `RunTask` trigger, and the
 EventBridge sweep.
+### 2026-09-07 — Stage 3 applied, except App Runner
+
+The account exists, Neon holds the schema, and the analysis path runs on deployed
+infrastructure. `infra/` grew `network.tf`, `secrets.tf`, `ecs.tf`, `apprunner.tf`, and
+`scheduler.tf`: a VPC with two public subnets and no NAT, the ECS cluster and the worker
+task definition at 4 vCPU and 8 GB, the App Runner service and its two roles, the
+EventBridge sweep, and two SSM parameters holding the connection string.
+
+**Everything applied except the two App Runner resources.** They fail at create with
+`SubscriptionRequiredException` while reads against App Runner succeed from the same admin
+credentials in the same region, and every other service accepted writes. The account was
+created today and the remaining hypothesis is that activation is still completing, which is
+unconfirmed. See `notes/2026-09-07-first-deploy-and-fargate-measurements.md`.
+
+**3.3, two of three numbers.** Measured against `gen9ou-2672899958`, 93 turns:
+`run-task` to first container log line is 16.8 s, covering ENI attachment, a 101 MB
+in-region ECR pull, and Python start. In-container overhead is 0.58 s, against 1.1 s
+measured locally in compose, because Fargate's process is already running when the first
+log line lands. The analysis itself took 118,923 ms. End-to-end wall time over a public URL
+is still unknown, because there is no public URL yet.
+
+Draining per burst survives the measurement: 16.8 s is 14% overhead on the first job and
+zero on every job after it.
+
+**Two decisions that changed during the build.**
+
+The sweep runs hourly rather than "every few minutes" as this plan said. Fargate bills a
+one-minute minimum and the worker task is about $0.198 an hour, so every execution costs
+about $0.0033 whether or not it finds work. Every five minutes is roughly $28 a month to
+poll an empty queue, more than the API and the database together. The arithmetic is in
+`scheduler.tf` and the interval is `var.sweep_interval_minutes`. The trigger is the real
+path; this is the floor under it. The sweep fired once on its own during testing, drained 0
+jobs, and exited, which is the behavior the design wanted.
+
+The connection string is two SSM parameters rather than one, because the tiers disagree
+about what `sslmode=require` means. The API's says `verify-full` and the worker's says
+`require`, per `notes/gotcha-sslmode-require-means-different-things-per-driver.md`.
+
+**Not built, and next.** The API's `RunTask` call after enqueue: the IAM policy, the
+task-definition family, the subnets, the security group, and the concurrency cap are all
+set as environment variables on the App Runner service, and no code reads them yet. Until
+that exists the sweep is the only trigger, which means up to an hour of latency.
+
+Also unresolved and now live rather than theoretical: `trustProxy` is off, so behind App
+Runner every client will share one rate-limit bucket. It has to go on together with a proxy
+whose forwarded headers can be trusted.
