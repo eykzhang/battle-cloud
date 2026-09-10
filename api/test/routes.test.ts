@@ -428,3 +428,19 @@ test('a malformed cursor is refused rather than treated as page one', async () =
   }
   await app.close();
 });
+
+test('a CORS preflight is answered 2xx rather than 404', async () => {
+  // API Gateway's $default route hands OPTIONS to this app, and a browser treats any
+  // non-2xx preflight as a refusal, so a 404 here silently blocks every cross-origin POST
+  // while leaving GETs working.
+  const app = await server();
+  for (const url of ['/v1/analyses', '/v1/jobs/whatever', '/']) {
+    const res = await app.inject({
+      method: 'OPTIONS',
+      url,
+      headers: { origin: 'https://battle-cloud.edward-zhang06.workers.dev', 'access-control-request-method': 'POST' },
+    });
+    assert.equal(res.statusCode, 204, `preflight for ${url}`);
+  }
+  await app.close();
+});

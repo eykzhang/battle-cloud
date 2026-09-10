@@ -170,6 +170,24 @@ export async function registerRoutes(app: FastifyInstance, deps: Deps): Promise<
    * and the analyses are of public Showdown replays; the limiter exists for submissions,
    * which cost a core-minute.
    */
+  /**
+   * CORS preflight, answered with 204 and nothing else.
+   *
+   * The headers themselves come from API Gateway's own CORS configuration, which is
+   * documented to ignore whatever the integration returns, so this handler deliberately
+   * sets none. What it fixes is the status: a `$default` route catches `OPTIONS` along with
+   * everything else, so a preflight reaches Fastify, finds no route, and returns 404 with
+   * the gateway's CORS headers attached. Browsers require a 2xx preflight, so every
+   * cross-origin POST from the web client failed before it was sent, while GETs -- which
+   * are not preflighted -- worked. That asymmetry is what made it invisible until a real
+   * browser tried to submit.
+   *
+   * Local runs (compose, the test suite) have no gateway in front and no browser either, so
+   * a bare 204 is correct there as well.
+   */
+  app.options('/*', async (_request, reply) => reply.code(204).send());
+  app.options('/', async (_request, reply) => reply.code(204).send());
+
   app.get<{ Querystring: Record<string, string> }>('/v1/analyses', async (request, reply) => {
     const parsed = ListQuerySchema.safeParse(request.query);
     if (!parsed.success) {
