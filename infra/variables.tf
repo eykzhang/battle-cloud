@@ -63,3 +63,21 @@ variable "sweep_interval_minutes" {
   type        = number
   default     = 60
 }
+
+variable "budget_alert_email" {
+  description = "Where budget alerts go. Empty means no budget is created at all, which keeps `apply` working for anyone who has not set one. Set it in terraform.tfvars."
+  type        = string
+  default     = ""
+}
+
+variable "monthly_budget_usd" {
+  description = "The monthly figure the budget alerts against. Ten dollars is several times what this should cost, so a breach means something is wrong rather than that the project grew."
+  type        = number
+  default     = 10
+}
+
+variable "state_bucket_name" {
+  description = "S3 bucket holding Terraform state. Bucket names are globally unique, so this carries the account id. Created by this configuration and then adopted as its backend, which is a two-step by necessity: the bucket cannot exist before the run that creates it."
+  type        = string
+  default     = "battle-cloud-tfstate-618426070248"
+}

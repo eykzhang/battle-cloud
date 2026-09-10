@@ -87,9 +87,42 @@ The `mirror-to-ecr` and `deploy-api` jobs in `.github/workflows/ci.yml` are skip
 their variables are unset, so nothing breaks before this is applied and they start running once
 it is. All four are set.
 
+## Cost alerts
+
+`budget.tf` creates an AWS Budget with two notifications: half the monthly figure actually
+spent, and the whole of it forecast. It is skipped entirely unless an address is set, so
+`apply` works without one.
+
+```
+# infra/terraform.tfvars
+budget_alert_email = "you@example.com"
+```
+
+`monthly_budget_usd` defaults to 10, which is several times what this should cost. A breach
+means something is wrong, not that the project grew. The API Gateway stage throttle is the
+first defense against a runaway bill; this is how you find out the throttle was set wrong.
+
+Budgets is a billing API, so it needs IAM access to billing enabled on the account. That is a
+root-only setting: **Account → IAM user and role access to billing information → Activate**.
+Without it the apply fails with AccessDenied on `budgets:CreateBudget`, which does not mention
+the setting.
+
 ## State
 
-Local, on purpose, and it is the first thing to revisit. An S3 backend needs a bucket, and
-creating that bucket with the same Terraform whose state it holds is the usual bootstrap
-knot. Local state is honest for one operator applying from one machine, and it is lost with
-that machine. `versions.tf` records what the move looks like.
+Local until `state.tf`'s bucket exists, then S3. The bootstrap is a forced two-step, since a
+backend cannot reference a bucket a later run creates:
+
+```
+AWS_PROFILE=tf terraform apply                 # creates the bucket
+# uncomment the backend block in versions.tf
+AWS_PROFILE=tf terraform init -migrate-state   # answer yes; copies state up
+```
+
+The local `terraform.tfstate` stays on disk afterwards as a backup and stops being read. The
+bucket is versioned, so a bad apply or a corrupted push is recoverable, with old versions
+expiring after ninety days. Locking is `use_lockfile = true`, S3 native conditional writes,
+which is why there is no DynamoDB table: that was the mandatory companion until S3 grew the
+primitive that replaces it.
+
+`prevent_destroy` is set on the bucket. It holds the record of everything else in the account,
+and a `terraform destroy` that took it out first would leave the rest orphaned and invisible.

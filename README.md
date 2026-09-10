@@ -2,8 +2,8 @@
 
 Puts [`battle-engine`](../battle-engine) behind a network API. Submit a Pokemon Showdown replay
 id, get back a per-turn win-probability analysis computed by the real engine. A React and
-TypeScript web client is the second half; `battle-brain`, the iOS app, is a second client whose
-`EngineService` protocol was designed as a seam for exactly this.
+TypeScript web client is the second half; `battle-brain`, the iOS app, is a second client: its `HostedEngineService` implements the
+`EngineService` seam over this API, though that app still ships bundled fixtures by default.
 
 ## Status
 
