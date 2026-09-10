@@ -4,3 +4,11 @@
 aws_region        = "us-east-2"
 github_repository = "eykzhang/battle-cloud"
 deploy_branch     = "main"
+
+# Where budget alerts go. Leave it out entirely and no budget is created, which keeps
+# `apply` working for anyone who has not set one up.
+# budget_alert_email = "you@example.com"
+
+# The monthly figure alerted against, at 50% actual and 100% forecast. Ten dollars is
+# several times what this should cost, so a breach means something is wrong.
+# monthly_budget_usd = 10
