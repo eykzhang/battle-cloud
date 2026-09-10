@@ -13,14 +13,14 @@ Deployed and public since 2026-09-10:
 https://m6tky2d13e.execute-api.us-east-2.amazonaws.com
 ```
 
-154 tests: 68 in the API tier, 86 in Python. `POST /v1/analyses` with a replay id fetches that
+159 tests: 73 in the API tier, 86 in Python. `POST /v1/analyses` with a replay id fetches that
 replay from Showdown, queues a job, and starts a Fargate worker that runs the real gen9 engine
 and produces a schema-v1 analysis document that `GET /v1/analyses/{id}` serves back.
 Resubmitting the same identity returns the cached analysis rather than spending another
 core-minute. Measured end to end through the public URL: 26.7 s from submit to served analysis
 for a 24-turn replay, of which 17.4 s is Fargate scheduling and 8.6 s is the engine.
 
-Not built: the React web client.
+The React web client is built and deploys to Cloudflare Pages from `web/`.
 
 | Piece | State |
 |---|---|
@@ -39,7 +39,7 @@ Not built: the React web client.
 | `docker-compose.yml` | postgres + migrate + api + worker, verified |
 | `infra/` | Terraform: Lambda, HTTP API, ECS, ECR, OIDC, networking, scheduler |
 | CI | tests, three image builds, gen9 guard, ECR mirror, and the API deploy |
-| web client | not started |
+| `web/` | React and TypeScript over Vite, on Cloudflare Pages |
 
 ## Try it
 
@@ -78,6 +78,7 @@ seconds for the same replay and a little over two minutes for a 93-turn one.
 
 | Route | Behavior |
 |---|---|
+| `GET /v1/analyses` | A page of recent analyses, newest first, as summaries rather than documents. `limit` up to 50 and an opaque `cursor`. |
 | `POST /v1/analyses` | 200 with the analysis if this identity is already computed, else 202 with a job handle. Resubmitting a live identity joins its job. |
 | `GET /v1/analyses/{analysisId}` | The envelope: `analysisId`, `seed`, `createdAt`, and the untouched schema-v1 `document`. |
 | `GET /v1/jobs/{jobId}` | Status, estimated turns, estimated search time, and the analysis id once it exists. |
@@ -93,7 +94,7 @@ the eight-field analysis identity, the job states, and the error vocabulary.
 createdb battlecloud
 DATABASE_URL=postgres:///battlecloud python db/migrate.py up
 
-npm --prefix api install && npm --prefix api test                     # 68
+npm --prefix api install && npm --prefix api test                     # 73
 DATABASE_URL=postgres:///battlecloud python -m pytest -q              # 86
 ```
 
@@ -119,6 +120,10 @@ A push to `main` runs the tests, publishes three images, mirrors them to ECR, an
 API by building the bundle and calling `update-function-code`. Terraform owns the function's
 configuration; CI owns only its code.
 
+The web client is the one piece outside AWS: Cloudflare Pages builds and serves it from the
+same push, with no workflow of ours and no bucket to configure. `web/README.md` has the
+settings and `notes/decision-cloudflare-pages-for-the-web-client.md` the reasoning.
+
 ```
 cd infra
 AWS_PROFILE=tf terraform apply     # infrastructure
@@ -135,6 +140,7 @@ working copy rather than something the repository should carry. See the parent `
 
 ```
 api/      TypeScript gateway (Fastify). Accepts jobs, serves analyses.
+web/      React and TypeScript client. Submit, watch, read the eval curve.
 worker/   Python worker. One engine search in flight per process.
 db/       Schema, migrations, and the SKIP LOCKED queue queries.
 docker/   Image definitions, including the gen9 poke-engine build.

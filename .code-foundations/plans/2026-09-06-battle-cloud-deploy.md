@@ -1,6 +1,6 @@
 # Plan: deploy battle-cloud to AWS with a scale-to-zero worker
 
-**Status:** Stages 1 through 3 complete and verified end to end on a public URL, 2026-09-10. Stage 4, the web client, is all that remains.
+**Status:** complete. All four stages built and verified, 2026-09-10. The API is public on Lambda and the web client is written and building; connecting it to Cloudflare Pages is a console step.
 
 Follows `2026-09-06-battle-cloud-foundation.md`, which closed the submit-analyze-serve loop
 locally. This plan takes it to a public URL.
@@ -397,3 +397,41 @@ on the cold-start parameter read. 86 Python, unchanged.
 
 **Still open:** Stage 4, the web client. Terraform state is still a file on one laptop. Nothing
 watches the bill.
+
+
+### 2026-09-10 — Stage 4, the web client
+
+React and TypeScript over Vite in `web/`, hosted on Cloudflare Pages rather than the S3 and
+CloudFront the stage anticipated. See `notes/decision-cloudflare-pages-for-the-web-client.md`:
+the AWS version is about eighty lines of Terraform and a sync-and-invalidate job for a service
+whose whole behavior is returning three files, and the deploy-then-stale-index failure mode it
+invites does not exist when the host builds from the push. The cost is that this project's "all
+AWS" story now carries an exception, which the note says plainly rather than hiding.
+
+**The API needed one new route to make a site worth visiting.** A visitor arriving with no
+replay id had nothing to look at, and nothing could answer "what has been analyzed". `GET
+/v1/analyses` returns summaries rather than envelopes -- documents run 100 KB to 220 KB, so a
+page of twenty would be several megabytes to render a list of links -- with keyset pagination
+on `(created_at, id)` and migration 0004 for the index that sort needs.
+
+The id is in the sort key for a reason that showed up immediately in production: the two
+analyses now in the database are the same replay from p1 and p2, written seconds apart. A
+cursor on the timestamp alone drops or repeats one at a page boundary, and the test that pages
+through seven rows three at a time is what pins it.
+
+**Two charts, not one with two axes.** Win probability is a probability and cost is a difference
+between two action values. One frame with two y-scales is the dual-axis chart, where whatever
+relationship the author wants appears by choosing the scales; they are small multiples on a
+shared turn axis instead. Turns the engine could not evaluate break the line rather than
+interpolating, since a segment across a missing turn is a claim the analysis does not make.
+Both charts have a table view behind a button, which is also what makes the page readable
+without color. The two series colors were validated for contrast and colorblind separation
+against both the light and dark surfaces rather than chosen by eye.
+
+**Tests: 159.** 73 API, up from 68, all five new ones on the list route. 86 Python, unchanged.
+CI gained a `web` job so a broken client is reported next to the API tests rather than only in
+Cloudflare's build log.
+
+**Not verified: how it looks.** No browser is available in this environment, so the client has
+been typechecked and built but not rendered and eyeballed. That check is the user's, and the
+skill's own procedure names it as a step rather than an optional one.
