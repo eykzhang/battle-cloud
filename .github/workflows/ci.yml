@@ -50,6 +50,23 @@ jobs:
           pip install pytest
           python -m pytest -q
 
+  # The web client is built and typechecked here, and deployed by Cloudflare Pages on its
+  # own from a push to main. This job exists so a break is reported next to the API tests
+  # rather than only in Cloudflare's build log.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the web client
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+
   # The API's deploy. Code only: Terraform owns the function's configuration, and this role
   # is granted lambda:UpdateFunctionCode on one function and nothing else.
   #

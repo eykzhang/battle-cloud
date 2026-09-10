@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { AnalysisIdentity, Profile } from './contract/index.ts';
+import type { AnalysisIdentity, AnalysisSummary, Profile } from './contract/index.ts';
 
 /**
  * Every database statement the API makes.
@@ -34,6 +34,45 @@ export interface StoredAnalysis {
   seed: number;
   createdAt: string;
   document: unknown;
+}
+
+/**
+ * The sort key of the public list: newest first, with the id breaking ties.
+ *
+ * Keyset rather than OFFSET. An offset re-reads and discards every row before the page,
+ * so deep pages get slower in proportion to their depth, and a row inserted while a
+ * visitor pages through shifts every later page by one, which shows up as a duplicated or
+ * skipped entry rather than as an error. The id is in the key because two analyses of the
+ * same replay at different profiles land within milliseconds of each other, and a cursor
+ * on the timestamp alone would drop or repeat one at a page boundary.
+ */
+export interface AnalysisCursor {
+  createdAt: string;
+  id: string;
+}
+
+/** Opaque to clients, and deliberately not JSON: a client that parses it will break. */
+export function encodeCursor(cursor: AnalysisCursor): string {
+  return Buffer.from(`${cursor.createdAt}|${cursor.id}`, 'utf8').toString('base64url');
+}
+
+export class CursorError extends Error {}
+
+/**
+ * Rejects rather than ignores a malformed cursor. Silently returning the first page would
+ * turn a client's pagination bug into an infinite loop over page one.
+ */
+export function decodeCursor(raw: string): AnalysisCursor {
+  const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+  const separator = decoded.indexOf('|');
+  if (separator === -1) throw new CursorError('cursor is not a valid pagination cursor');
+  const createdAt = decoded.slice(0, separator);
+  const id = decoded.slice(separator + 1);
+  // Both halves are fed to Postgres as timestamptz and uuid, so a value that is neither
+  // fails in the driver with a message about types rather than about the request.
+  if (Number.isNaN(Date.parse(createdAt))) throw new CursorError('cursor carries an invalid timestamp');
+  if (!/^[0-9a-fA-F-]{36}$/.test(id)) throw new CursorError('cursor carries an invalid id');
+  return { createdAt, id };
 }
 
 export interface StoredJob {
@@ -109,6 +148,44 @@ export class Store {
       createdAt: new Date(row['created_at']).toISOString(),
       document: row['document'],
     };
+  }
+
+  /**
+   * A page of recent analyses, newest first, joined to their replays for the parts a list
+   * needs: format, rating, and the two player names.
+   *
+   * `limit` is passed through as given, and the route asks for one more row than it means
+   * to return. That is how `nextCursor` is decided without a second COUNT query: if the
+   * extra row exists there is another page, and if it does not there is not.
+   */
+  async recentAnalyses(limit: number, cursor: AnalysisCursor | null): Promise<AnalysisSummary[]> {
+    const { rows } = await this.pool.query(
+      `SELECT a.id, a.replay_id, a.perspective, a.total_turns, a.gradable_turns,
+              a.search_budget_ms_per_turn, a.opponent_samples, a.created_at,
+              r.format, r.rating, r.players
+         FROM analyses a
+         JOIN replays r ON r.id = a.replay_id
+        WHERE $2::timestamptz IS NULL
+           OR (a.created_at, a.id) < ($2::timestamptz, $3::uuid)
+        ORDER BY a.created_at DESC, a.id DESC
+        LIMIT $1`,
+      [limit, cursor?.createdAt ?? null, cursor?.id ?? null],
+    );
+    return rows.map((row) => ({
+      analysisId: row['id'],
+      replayId: row['replay_id'],
+      format: row['format'],
+      rating: row['rating'],
+      // The column is jsonb with a default of `[]`, and the replay payload it comes from
+      // is untrusted, so anything that is not a string is dropped rather than served.
+      players: Array.isArray(row['players']) ? row['players'].filter((p: unknown) => typeof p === 'string') : [],
+      perspective: row['perspective'],
+      totalTurns: row['total_turns'],
+      gradableTurns: row['gradable_turns'],
+      searchBudgetMsPerTurn: row['search_budget_ms_per_turn'],
+      opponentSamples: row['opponent_samples'],
+      createdAt: new Date(row['created_at']).toISOString(),
+    }));
   }
 
   async upsertReplay(replay: {

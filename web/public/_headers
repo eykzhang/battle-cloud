@@ -1,0 +1,12 @@
+# Cloudflare Pages reads this file. The build output is a hashed bundle plus one
+# unhashed entry document, so they get opposite caching rules.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY

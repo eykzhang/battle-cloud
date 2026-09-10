@@ -1,0 +1,248 @@
+/*
+ * Two themes, both selected rather than derived. The dark values are their own steps
+ * against the dark surface, not an inversion of the light ones.
+ */
+:root {
+  color-scheme: light;
+  --surface-0: #f4f4f2;
+  --surface-1: #fcfcfb;
+  --surface-2: #eeeeea;
+  --border: #d9d9d3;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #77756e;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --grid: #e3e3dd;
+  --accent-soft: rgba(42, 120, 214, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #242422;
+    --border: #34342f;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #92918a;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --grid: #2c2c28;
+    --accent-soft: rgba(57, 135, 229, 0.16);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+a {
+  color: var(--series-1);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+.shell {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+header.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+  padding-block: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+header.masthead h1 {
+  font-size: 19px;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+header.masthead p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+  letter-spacing: -0.01em;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+input[type='text'],
+select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-primary);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  min-height: 38px;
+}
+input[type='text'] {
+  min-width: 260px;
+  flex: 1 1 260px;
+}
+
+button {
+  background: var(--series-1);
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  min-height: 38px;
+  padding: 8px 16px;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+button.secondary {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.error {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--series-2);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+th,
+td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+th {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+td.num,
+th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.scroll-x {
+  overflow-x: auto;
+}
+
+.chart-figure {
+  margin: 0;
+}
+.chart-figure figcaption {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: 12px;
+  color: var(--text-primary);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+  z-index: 2;
+  max-width: 230px;
+}
+
+.chart-wrap {
+  position: relative;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.pills li {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.list-item {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.list-item:last-child {
+  border-bottom: none;
+}
+.list-item .who {
+  font-weight: 600;
+  font-size: 14px;
+}

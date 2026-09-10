@@ -332,3 +332,99 @@ test('a launcher that fails does not fail the submission', async () => {
 
   await app.close();
 });
+
+/**
+ * The public list, `GET /v1/analyses`. Pagination is the part worth testing against real
+ * rows: a keyset cursor is exactly the kind of code that looks right and silently skips or
+ * repeats an entry at a page boundary, and analyses of one replay at two profiles are
+ * written milliseconds apart, which is the boundary case.
+ */
+
+async function seedAnalyses(count: number): Promise<void> {
+  await pool.query(
+    "INSERT INTO replays (id, format, rating, players, log, payload_bytes) VALUES ($1,'gen9ou',1645,$2,$3,$4)",
+    [REPLAY_ID, JSON.stringify(['alice', 'bob']), RAW.log, Buffer.byteLength(RAW.log)],
+  );
+  for (let i = 0; i < count; i += 1) {
+    await pool.query(
+      `INSERT INTO analyses (replay_id, perspective, search_budget_ms_per_turn, opponent_samples,
+          threads, usage_stats_cutoff, usage_stats_dataset, poke_engine_tag, seed, document,
+          total_turns, gradable_turns, wall_ms)
+       VALUES ($1,'p2',$2,2,4,1500,'2026-07','v0.0.48',0,$3,24,16,7500)`,
+      // The budget varies only to keep the identity unique; every row shares a timestamp
+      // to the millisecond, which is what makes the id tiebreak load-bearing.
+      [REPLAY_ID, 100 + i, JSON.stringify(ANALYSIS)],
+    );
+  }
+}
+
+test('the list returns summaries rather than documents', async () => {
+  await seedAnalyses(1);
+  const app = await server();
+  const res = await app.inject({ method: 'GET', url: '/v1/analyses' });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.analyses.length, 1);
+  const row = body.analyses[0];
+  // A page of twenty documents would be several megabytes; the whole point is that this
+  // carries none of them.
+  assert.equal(row.document, undefined);
+  assert.deepEqual(
+    { format: row.format, rating: row.rating, players: row.players, turns: row.totalTurns },
+    { format: 'gen9ou', rating: 1645, players: ['alice', 'bob'], turns: 24 },
+  );
+  assert.equal(body.nextCursor, null);
+  await app.close();
+});
+
+test('paging with the cursor visits every analysis exactly once', async () => {
+  await seedAnalyses(7);
+  const app = await server();
+
+  const seen: string[] = [];
+  let url = '/v1/analyses?limit=3';
+  for (let page = 0; page < 10; page += 1) {
+    const body = (await app.inject({ method: 'GET', url })).json();
+    seen.push(...body.analyses.map((a: { analysisId: string }) => a.analysisId));
+    if (body.nextCursor === null) break;
+    url = `/v1/analyses?limit=3&cursor=${encodeURIComponent(body.nextCursor)}`;
+  }
+
+  assert.equal(seen.length, 7, 'every row appears');
+  assert.equal(new Set(seen).size, 7, 'and none appears twice');
+  await app.close();
+});
+
+test('the last page reports no next cursor even when it is exactly full', async () => {
+  // The off-by-one that matters: asking for one more row than the limit is what decides
+  // there is a next page, so a final page whose size equals the limit must still end.
+  await seedAnalyses(6);
+  const app = await server();
+  const first = (await app.inject({ method: 'GET', url: '/v1/analyses?limit=3' })).json();
+  assert.equal(first.analyses.length, 3);
+  assert.notEqual(first.nextCursor, null);
+  const second = (
+    await app.inject({ method: 'GET', url: `/v1/analyses?limit=3&cursor=${encodeURIComponent(first.nextCursor)}` })
+  ).json();
+  assert.equal(second.analyses.length, 3);
+  assert.equal(second.nextCursor, null);
+  await app.close();
+});
+
+test('a limit above the cap is refused rather than silently clamped', async () => {
+  const app = await server();
+  const res = await app.inject({ method: 'GET', url: '/v1/analyses?limit=500' });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error.kind, 'invalid_request');
+  await app.close();
+});
+
+test('a malformed cursor is refused rather than treated as page one', async () => {
+  // Returning the first page would turn a client's pagination bug into an infinite loop.
+  const app = await server();
+  for (const cursor of ['not-base64!!', Buffer.from('no-separator').toString('base64url')]) {
+    const res = await app.inject({ method: 'GET', url: `/v1/analyses?cursor=${encodeURIComponent(cursor)}` });
+    assert.equal(res.statusCode, 400, `rejected ${cursor}`);
+  }
+  await app.close();
+});

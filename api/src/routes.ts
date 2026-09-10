@@ -4,9 +4,11 @@ import {
   SubmitRequestSchema,
   type ErrorKind,
   type Profile,
+  ListQuerySchema,
 } from './contract/index.ts';
 import { estimateDuration, estimateTurns, fetchReplay, ReplayFetchError, type ReplayDeps } from './replay/index.ts';
 import type { ApiConfig } from './config.ts';
+import { CursorError, decodeCursor, encodeCursor, type AnalysisCursor } from './store.ts';
 import type { Store, StoredAnalysis, StoredJob } from './store.ts';
 import type { RateLimiter } from './ratelimit.ts';
 import type { WorkerLauncher } from './worker.ts';
@@ -161,6 +163,39 @@ export async function registerRoutes(app: FastifyInstance, deps: Deps): Promise<
     // 202 either way. A resubmit that joined a live job is not an error, and the client
     // polls the same handle regardless of which call created it.
     return reply.code(202).header('location', `/v1/jobs/${job.id}`).send({ ...jobView(job), created });
+  });
+
+  /**
+   * The public list. Unauthenticated and unlimited by rate, because a read costs a query
+   * and the analyses are of public Showdown replays; the limiter exists for submissions,
+   * which cost a core-minute.
+   */
+  app.get<{ Querystring: Record<string, string> }>('/v1/analyses', async (request, reply) => {
+    const parsed = ListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      const { status, body } = fail('invalid_request', parsed.error.issues.map((i) => i.message).join('; '));
+      return reply.code(status).send(body);
+    }
+    const { limit } = parsed.data;
+
+    let cursor: AnalysisCursor | null = null;
+    try {
+      cursor = parsed.data.cursor === undefined ? null : decodeCursor(parsed.data.cursor);
+    } catch (cause) {
+      const message = cause instanceof CursorError ? cause.message : 'cursor is not a valid pagination cursor';
+      const { status, body } = fail('invalid_request', message);
+      return reply.code(status).send(body);
+    }
+
+    // One more than asked for, which is what decides whether there is a next page.
+    const rows = await deps.store.recentAnalyses(limit + 1, cursor);
+    const analyses = rows.slice(0, limit);
+    const last = analyses[analyses.length - 1];
+    const nextCursor =
+      rows.length > limit && last !== undefined
+        ? encodeCursor({ createdAt: last.createdAt, id: last.analysisId })
+        : null;
+    return reply.code(200).send({ analyses, nextCursor });
   });
 
   app.get<{ Params: { analysisId: string } }>('/v1/analyses/:analysisId', async (request, reply) => {

@@ -138,3 +138,63 @@ export const AnalysisEnvelopeSchema = z
   .strict();
 
 export type AnalysisEnvelope = z.infer<typeof AnalysisEnvelopeSchema>;
+
+/**
+ * One row of `GET /v1/analyses`, the public list.
+ *
+ * A summary rather than an envelope, because the documents run 100 KB to 220 KB and a
+ * page of twenty of them would be a several-megabyte response to render a list of links.
+ * The fields are what a list needs to be readable: which battle, seen from which side,
+ * how long it ran, and how much of it the engine could grade.
+ *
+ * `searchBudgetMsPerTurn` and `opponentSamples` rather than a profile name: the profile
+ * is not stored on an analysis, deliberately, since it is shorthand that expands into
+ * these parameters and two profiles expanding identically share one analysis. A client
+ * that wants a label can match these against `PROFILES`, and must accept that some
+ * analyses will match none of them once a profile's parameters change.
+ */
+export const AnalysisSummarySchema = z
+  .object({
+    analysisId: z.string(),
+    replayId: z.string(),
+    format: z.string(),
+    rating: int.nullable(),
+    players: z.array(z.string()),
+    perspective: z.enum(PERSPECTIVES),
+    totalTurns: int,
+    gradableTurns: int,
+    searchBudgetMsPerTurn: int,
+    opponentSamples: int,
+    createdAt: z.string(),
+  })
+  .strict();
+
+export type AnalysisSummary = z.infer<typeof AnalysisSummarySchema>;
+
+/**
+ * A page of them. `nextCursor` is opaque on purpose: it encodes the sort key of the last
+ * row, and a client that parses it is a client that breaks when the sort changes.
+ */
+export const AnalysisPageSchema = z
+  .object({
+    analyses: z.array(AnalysisSummarySchema),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+
+export type AnalysisPage = z.infer<typeof AnalysisPageSchema>;
+
+/**
+ * `GET /v1/analyses` query parameters.
+ *
+ * The limit is capped at 50 rather than left open: the page is public and unauthenticated,
+ * and an uncapped limit is an invitation to ask for the whole table in one request.
+ */
+export const ListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    cursor: z.string().min(1).optional(),
+  })
+  .strict();
+
+export type ListQuery = z.infer<typeof ListQuerySchema>;
