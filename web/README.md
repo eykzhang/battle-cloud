@@ -16,20 +16,30 @@ against compose.
 
 ## Hosting
 
-Cloudflare Pages, connected to this repository. The settings that matter:
+Cloudflare Workers, connected to this repository, serving static assets with no Worker script:
+`wrangler.jsonc` is the whole deployment. Cloudflare routes new git connections through Workers
+rather than Pages now, and this is the path they are developing.
+
+The dashboard's build settings:
 
 | Setting | Value |
 |---|---|
 | Root directory | `web` |
 | Build command | `npm run build` |
-| Build output directory | `dist` |
-| Environment variable | `VITE_API_BASE_URL` |
+| Deploy command | `npx wrangler deploy` |
+| Build variable | `NODE_VERSION` = `22` |
 
-Pages is the one piece of this project's infrastructure outside AWS. Everything else is
-Terraform in `../infra`; a static site needs a CDN and nothing else, and Pages does that on
-a push with no build job of ours and no bucket to configure. The API's CORS configuration
-already allows any origin, so no Terraform change is needed when the site's hostname
-appears or changes.
+`NODE_VERSION` matters: the default is older than Vite 6 accepts, and the failure is a build-log
+error about an unsupported engine rather than anything about this code.
+
+`VITE_API_BASE_URL` is optional. It defaults to the deployed API, so the site works without it.
+
+This is the one piece of the project's infrastructure outside AWS. Everything else is Terraform
+in `../infra`; a static site needs a CDN and nothing else, and this deploys itself on a push with
+no build job of ours and no bucket to configure. The API's CORS configuration already allows any
+origin, so no Terraform change is needed when the site's hostname appears or changes. The
+reasoning, including what the exception costs, is in
+`../notes/decision-cloudflare-pages-for-the-web-client.md`.
 
 ## Design notes
 

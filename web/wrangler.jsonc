@@ -1,0 +1,18 @@
+{
+  // Cloudflare routes git connections through Workers rather than Pages now, and a Worker
+  // that serves only static assets needs no script: this `assets` block is the whole
+  // deployment. `npx wrangler deploy`, the dashboard's deploy command, reads this file.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "battle-cloud",
+  "compatibility_date": "2026-09-10",
+  // Off in a build environment nobody is watching; it is on by default.
+  "send_metrics": false,
+  "assets": {
+    // Relative to this file, so the build output at web/dist.
+    "directory": "./dist",
+    // Routing here is hash-based, so every URL is already "/" and this changes nothing
+    // today. It is set so a hand-typed deep link, or a path route added later, returns the
+    // app instead of a 404 from the edge.
+    "not_found_handling": "single-page-application"
+  }
+}

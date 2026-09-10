@@ -20,7 +20,7 @@ Resubmitting the same identity returns the cached analysis rather than spending 
 core-minute. Measured end to end through the public URL: 26.7 s from submit to served analysis
 for a 24-turn replay, of which 17.4 s is Fargate scheduling and 8.6 s is the engine.
 
-The React web client is built and deploys to Cloudflare Pages from `web/`.
+The React web client is built and deploys to Cloudflare from `web/`.
 
 | Piece | State |
 |---|---|
@@ -39,7 +39,7 @@ The React web client is built and deploys to Cloudflare Pages from `web/`.
 | `docker-compose.yml` | postgres + migrate + api + worker, verified |
 | `infra/` | Terraform: Lambda, HTTP API, ECS, ECR, OIDC, networking, scheduler |
 | CI | tests, three image builds, gen9 guard, ECR mirror, and the API deploy |
-| `web/` | React and TypeScript over Vite, on Cloudflare Pages |
+| `web/` | React and TypeScript over Vite, on Cloudflare Workers |
 
 ## Try it
 
@@ -120,9 +120,9 @@ A push to `main` runs the tests, publishes three images, mirrors them to ECR, an
 API by building the bundle and calling `update-function-code`. Terraform owns the function's
 configuration; CI owns only its code.
 
-The web client is the one piece outside AWS: Cloudflare Pages builds and serves it from the
-same push, with no workflow of ours and no bucket to configure. `web/README.md` has the
-settings and `notes/decision-cloudflare-pages-for-the-web-client.md` the reasoning.
+The web client is the one piece outside AWS: Cloudflare builds and serves it from the same push,
+with no workflow of ours and no bucket to configure. `web/README.md` has the settings and
+`notes/decision-cloudflare-pages-for-the-web-client.md` the reasoning.
 
 ```
 cd infra
