@@ -12,23 +12,23 @@ terraform {
     }
   }
 
-  # State is local until the bucket in state.tf exists, then it moves here.
+  # State lives in the bucket `state.tf` creates.
   #
-  # The two-step is forced: a backend cannot reference a bucket that a later run creates.
-  # So `terraform apply` once with local state to create it, then uncomment the block below
-  # and run `terraform init -migrate-state`, which copies the existing state up and leaves
-  # the local file behind as a backup.
+  # The bootstrap was a forced two-step, which is why this reads circularly: a backend
+  # cannot reference a bucket a later run creates, so the bucket was applied under local
+  # state and this block adopted it afterwards. The local `terraform.tfstate` is still on
+  # disk as a backup and is no longer read.
   #
   # Locking is `use_lockfile = true`, S3 native conditional writes. The DynamoDB table that
   # used to be mandatory for locking is not needed and is not here.
   #
-  # backend "s3" {
-  #   bucket       = "battle-cloud-tfstate-618426070248"
-  #   key          = "infra/terraform.tfstate"
-  #   region       = "us-east-2"
-  #   encrypt      = true
-  #   use_lockfile = true
-  # }
+  backend "s3" {
+    bucket       = "battle-cloud-tfstate-618426070248"
+    key          = "infra/terraform.tfstate"
+    region       = "us-east-2"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 provider "aws" {
