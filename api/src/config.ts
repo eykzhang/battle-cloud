@@ -21,6 +21,14 @@ export interface ApiConfig {
    */
   readonly usageStatsDataset: string;
   /**
+   * Connections this process opens to Postgres. Ten suits a long-lived server handling
+   * requests concurrently. Lambda sets it to two, because a function instance serves one
+   * request at a time and the pool is multiplied by every concurrent instance: the
+   * per-instance number is small precisely so the fleet's total stays under what Neon's
+   * pooler will hold.
+   */
+  readonly dbPoolMax: number;
+  /**
    * How to start a worker after enqueueing, or `null` for a deployment that has no way to.
    * Compose and the test suite are the second case: there is no ECS to call, and the
    * scheduled sweep covers a real deployment that omits this.
@@ -101,6 +109,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     submitRateLimitPerHour: int(env, 'SUBMIT_RATE_LIMIT_PER_HOUR', 20),
     pokeEngineTag: env['POKE_ENGINE_TAG'] ?? 'v0.0.48',
     usageStatsDataset: env['USAGE_STATS_DATASET'] ?? '2026-07',
+    dbPoolMax: int(env, 'DB_POOL_MAX', 10),
     workerLaunch: loadWorkerLaunch(env),
   };
 }

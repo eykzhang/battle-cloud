@@ -17,7 +17,12 @@ output "repository_urls" {
 
 output "api_url" {
   description = "The public HTTPS endpoint. This is the thing the project did not have."
-  value       = "https://${aws_apprunner_service.api.service_url}"
+  value       = aws_apigatewayv2_stage.default.invoke_url
+}
+
+output "api_function_name" {
+  description = "Set this as the API_FUNCTION_NAME repository variable in GitHub. The deploy job updates this function's code on every push to main."
+  value       = aws_lambda_function.api.function_name
 }
 
 output "worker_cluster" {

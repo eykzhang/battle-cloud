@@ -8,13 +8,15 @@ import { createWorkerLauncher } from './worker.ts';
 
 export async function buildServer(deps?: Partial<Parameters<typeof registerRoutes>[1]>) {
   const config = deps?.config ?? loadConfig();
-  const pool = new pg.Pool({ connectionString: config.databaseUrl });
+  const pool = new pg.Pool({ connectionString: config.databaseUrl, max: config.dbPoolMax });
   const app = Fastify({
     logger: true,
-    // Fastify trusts no proxy by default, so request.ip is the socket address. Behind a
-    // load balancer this must become the forwarded address or every client shares one
-    // rate-limit bucket. Left off until there is a proxy whose headers can be trusted:
-    // trusting them without one lets any caller spoof their own identity.
+    // Off, and correct behind API Gateway as well as in front of it. The Lambda adapter
+    // injects `requestContext.http.sourceIp` as the request's remote address, so
+    // `request.ip` is already the address AWS observed at the edge, which a caller cannot
+    // forge. Turning trustProxy on would replace that with the leftmost X-Forwarded-For
+    // entry, which a caller writes: strictly worse. `test/lambda.test.ts` pins this,
+    // because it is a property of the adapter rather than of anything in this file.
     trustProxy: false,
   });
   const store = deps?.store ?? new Store(pool);

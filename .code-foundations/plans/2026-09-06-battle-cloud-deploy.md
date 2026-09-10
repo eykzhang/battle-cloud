@@ -1,6 +1,6 @@
 # Plan: deploy battle-cloud to AWS with a scale-to-zero worker
 
-**Status:** in progress. Stage 1 complete and verified; Stage 2 next.
+**Status:** Stages 1 through 3 complete and verified end to end on a public URL, 2026-09-10. Stage 4, the web client, is all that remains.
 
 Follows `2026-09-06-battle-cloud-foundation.md`, which closed the submit-analyze-serve loop
 locally. This plan takes it to a public URL.
@@ -333,3 +333,67 @@ Both suites now run against Neon rather than compose.
 
 Not verified, and cannot be until App Runner exists: that the instance role's `ecs:RunTask`
 and `iam:PassRole` grants are sufficient in practice. The policy is written and unexercised.
+
+
+### 2026-09-10 — Stage 3 done, on Lambda rather than App Runner
+
+**Done when: "a `POST` to the public URL returns an analysis with no machine of mine involved,
+and the three numbers are recorded in a note."** Both halves hold.
+`https://m6tky2d13e.execute-api.us-east-2.amazonaws.com`, and
+`notes/2026-09-10-the-api-goes-public-on-lambda.md`.
+
+**App Runner was abandoned rather than waited on.** Three days after the account was created it
+still returned `SubscriptionRequiredException` in every region, from an IAM user holding
+AdministratorAccess, with a payment method verified as root, while ECS, ECR, SSM, EventBridge,
+Lightsail, and Amplify all accepted writes from the same credentials. One detail moved the wrong
+way: on 09-07 the read succeeded and returned an empty list; on 09-10 the read itself failed.
+It has no explanation, and waiting on one had no schedule attached to it.
+
+The replacement is a Lambda function behind an API Gateway HTTP API, and the plan's cost
+argument survives the substitution intact. The API tier is about $0.07 per thousand analyses
+served against roughly $0.0066 for the Fargate minute each analysis costs, so the front door is
+about 1% of the system at every level of traffic. That was true of App Runner too; what changed
+is that the floor went from a few dollars a month to zero.
+
+**The three numbers, plus two the plan did not ask for:**
+
+| | |
+|---|---:|
+| RunTask to container running | 17.4 s |
+| Of which ENI attachment | 11.5 s |
+| Of which image pull, 103 MB in-region | 4.7 s |
+| Analysis, 24 turns at `quick` | 8.6 s |
+| Submit to served analysis, end to end | 26.7 s |
+| API cold start / warm | 1.0 s / 0.15 s |
+
+**11.5 of the 17.4 seconds is networking, not bytes.** That retires image-size work for the
+worker as a latency lever, which is the second time this project has found the image size not
+to be the thing that mattered.
+
+**Three things verified for the first time**, all of them previously written and unexercised:
+the instance role's `ecs:RunTask` and `iam:PassRole` grants (the Lambda logged `worker task
+started` 0.7 s after the submission, and that task did the analysis); the cold-start SSM read
+that hands the function its connection string; and `sslmode=verify-full` to Neon from inside
+AWS.
+
+**Two limits found:** this account's Lambda concurrency limit is 10, the new-account default,
+and AWS refuses any reserved-concurrency setting that leaves under 100 unreserved, so the spend
+ceiling became an API Gateway stage throttle at 20 rps and 40 burst. And Lambda's runtime client
+will not load a `.ts` handler, so the artifact is an esbuild bundle rather than the container
+image the Dockerfile builds. Both are written up as gotchas.
+
+**The plan's `trustProxy` risk closed without the fix it assumed.** Fastify's hop-count trust
+does nothing as of 5.12 -- it fails closed by design -- and the Lambda adapter injects API
+Gateway's `sourceIp` as the request's remote address, so `request.ip` is already the address AWS
+observed and no caller can forge it. Three tests pin that, because the property now lives in a
+dependency.
+
+**CI deploys now**, which the earlier log listed as missing: a `deploy-api` job builds the
+bundle and calls `update-function-code`, holding `lambda:UpdateFunctionCode` on one function
+and nothing else. Terraform owns the function's configuration; CI owns its code.
+
+**Tests: 154.** 68 API, up from 61: three pinning the adapter's client-address behavior and four
+on the cold-start parameter read. 86 Python, unchanged.
+
+**Still open:** Stage 4, the web client. Terraform state is still a file on one laptop. Nothing
+watches the bill.

@@ -34,14 +34,8 @@ variable "github_repository_id" {
   default     = 1359218725
 }
 
-variable "api_image_tag" {
-  description = "The ECR tag App Runner deploys. Tags are commit shas because the repositories are immutable, so a deploy is a change to this value followed by an apply. Kept explicit rather than resolved to `latest`, which does not exist here."
-  type        = string
-  default     = "e6385f8be6a722266345d76cb149a23e9edbc349"
-}
-
 variable "worker_image_tag" {
-  description = "The ECR tag the worker task definition runs. Usually the same commit as api_image_tag, and it does not have to be: the analysis identity, not the deploy, is what decides whether two workers are interchangeable."
+  description = "The ECR tag the worker task definition runs. Usually the commit the API was deployed from, and it does not have to be: the analysis identity, not the deploy, is what decides whether two workers are interchangeable."
   type        = string
   default     = "e6385f8be6a722266345d76cb149a23e9edbc349"
 }

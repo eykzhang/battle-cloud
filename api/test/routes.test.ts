@@ -28,6 +28,7 @@ const CONFIG: ApiConfig = {
   submitRateLimitPerHour: 20,
   pokeEngineTag: 'v0.0.48',
   usageStatsDataset: '2026-07',
+  dbPoolMax: 10,
   workerLaunch: null,
 };
 

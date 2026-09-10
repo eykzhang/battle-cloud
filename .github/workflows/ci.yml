@@ -50,6 +50,53 @@ jobs:
           pip install pytest
           python -m pytest -q
 
+  # The API's deploy. Code only: Terraform owns the function's configuration, and this role
+  # is granted lambda:UpdateFunctionCode on one function and nothing else.
+  #
+  # The artifact is an esbuild bundle rather than the container image the job below
+  # publishes. Lambda's runtime client resolves a handler as .mjs, .js, or .cjs and will not
+  # load the .ts entry this project runs everywhere else. The image is still built, still
+  # tested, and still what compose runs.
+  deploy-api:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != '' && vars.API_FUNCTION_NAME != '' }}
+    needs: [api]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for the OIDC token that becomes AWS credentials.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Build the bundle
+        run: |
+          npm --prefix api ci
+          npm --prefix api run bundle
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-2' }}
+
+      - name: Update the function
+        env:
+          FUNCTION: ${{ vars.API_FUNCTION_NAME }}
+        run: |
+          set -euo pipefail
+          aws lambda update-function-code \
+            --function-name "$FUNCTION" \
+            --zip-file fileb://api/dist/lambda.zip \
+            --query 'LastModified' --output text
+          # update-function-code returns before the new code is in service, and a
+          # workflow that ends there reports success for a deploy that may still fail.
+          aws lambda wait function-updated --function-name "$FUNCTION"
+          echo "deployed ${GITHUB_SHA} to $FUNCTION" >> "$GITHUB_STEP_SUMMARY"
+
   api-image:
     runs-on: ubuntu-latest
     outputs:
